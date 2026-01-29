@@ -20,12 +20,14 @@ class BleDevice : public NimBLEServerCallbacks, public NimBLECharacteristicCallb
 private:
     NimBLEHIDDevice* hid;
     NimBLECharacteristic* inputMouse;
+    NimBLECharacteristic* inputJoystick;
     NimBLECharacteristic* inputKeyboard;
     NimBLECharacteristic* outputKeyboard;
     NimBLECharacteristic* inputMediaKeys;
     NimBLEAdvertising* advertising;
     std::string deviceName;
     std::string deviceManufacturer;
+    std::string connectedClientName;
     bool connected = false;
     uint8_t ledStatus = 0;
 
@@ -78,6 +80,21 @@ public:
     void sendMedia(uint8_t consumerCode);
 
     /**
+     * @brief Send a joystick HID report.
+     * @param buttons Button states (bit mask)
+     * @param x X axis position (0-255, 127 is center)
+     * @param y Y axis position (0-255, 127 is center)
+     * @param z Z axis position (optional, 0-255, 127 is center)
+     */
+    void sendJoystick(uint8_t buttons, uint8_t x, uint8_t y, uint8_t z = 127);
+
+    /**
+     * @brief Report battery level to the connected BLE host.
+     * @param level Battery level in percentage (0-100)
+     */
+    void reportBatteryLevel(uint8_t level);
+
+    /**
      * @brief Get LED status from host (Num Lock, Caps Lock, Scroll Lock).
      * @return LED status byte
      */
@@ -101,10 +118,16 @@ public:
      */
     bool isScrollLockOn() { return ledStatus & 0x04; }
 
+    /**
+     * @brief Get the connected client name/address.
+     * @return string with client info
+     */
+    std::string getConnectedClientName() { return connectedClientName; }
+
 protected:
-    virtual void onConnect(NimBLEServer* pServer) override;
-    virtual void onDisconnect(NimBLEServer* pServer) override;
-    void onWrite(NimBLECharacteristic* pCharacteristic) override;
+    virtual void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override;
+    virtual void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override;
+    void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override;
 
 private:
     /**
@@ -118,7 +141,22 @@ private:
     void sendMouseReport(uint8_t* data, uint8_t len);
 
     /**
+     * @brief Send raw joystick report data.
+     */
+    void sendJoystickReport(uint8_t* data, uint8_t len);
+
+    /**
      * @brief Send raw media report data.
      */
     void sendMediaReport(uint8_t* data, uint8_t len);
+
+    /**
+     * @brief Initialize NeoPixel RGB LED.
+     */
+    void initNeoPixel();
+
+    /**
+     * @brief Update NeoPixel status (green=connected, blue=disconnected).
+     */
+    void updateNeoPixelStatus();
 }; 

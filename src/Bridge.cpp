@@ -1,10 +1,27 @@
 #include "Bridge.h"
+#include "Display.h"
 #include <hid_usage_keyboard.h>
+
+// HID to ASCII conversion table
+static const char HID_TO_ASCII[256] = {
+    0, 0, 0, 0, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l',
+    'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '1', '2',
+    '3', '4', '5', '6', '7', '8', '9', '0', '\n', 0, 0x08, 0x09, ' ', '-', '=', '[',
+    ']', '\\', 0, ';', '\'', '`', ',', '.', '/', 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 // Static member initialization
 BleDevice Bridge::bleDevice("Keychron Q1 Wireless", "Espressif");
 
-void Bridge::begin() {
+void Bridge::begin()
+{
   Serial.println("[System] Initializing USB-to-BLE Bridge...");
 
   // Initialize BLE
@@ -21,16 +38,39 @@ void Bridge::begin() {
   Serial.println("[System] Bridge initialized - waiting for connections...");
 }
 
-void Bridge::loop() {
-  // Status reporting
-  static unsigned long lastStatusTime = 0;
-  if (millis() - lastStatusTime > 10000) {
-    lastStatusTime = millis();
-    Serial.printf("[System] BLE Status: %s\n", bleDevice.isConnected() ? "CONNECTED" : "DISCONNECTED");
+void displayConnectionStatus()
+{
+  // Display connection status at bottom of screen
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(1);
+  tft.setCursor(10, 300);
+
+  if (Bridge::isConnected())
+  {
+    std::string clientName = Bridge::getConnectedClientName();
+    tft.printf("Conn.: %s        ", clientName.c_str());
+  }
+  else
+  {
+    tft.printf("Disconnected - Waiting...         ");
   }
 }
 
-void Bridge::onKeyboardReport(const uint8_t *data, size_t length) {
+
+void Bridge::loop()
+{
+  // Status reporting
+  static unsigned long lastStatusTime = 0;
+  if (millis() - lastStatusTime > 10000)
+  {
+    lastStatusTime = millis();
+    Serial.printf("[System] BLE Status: %s\n", bleDevice.isConnected() ? "CONNECTED" : "DISCONNECTED");
+    displayConnectionStatus();
+  }
+}
+
+void Bridge::onKeyboardReport(const uint8_t *data, size_t length)
+{
   if (length < sizeof(hid_keyboard_input_report_boot_t))
     return;
 
@@ -43,14 +83,107 @@ void Bridge::onKeyboardReport(const uint8_t *data, size_t length) {
                 kb_report->key[2], kb_report->key[3], kb_report->key[4],
                 kb_report->key[5]);
 
+  // Extract first pressed key and convert to ASCII for display
+  if (kb_report->key[0] != 0)
+  {
+    char asciiKey = HID_TO_ASCII[kb_report->key[0]];
+
+    // Handle shift modifier for uppercase/symbols
+    if (kb_report->modifier.val & 0x02 || kb_report->modifier.val & 0x20)
+    { // Left or Right Shift
+      if (asciiKey >= 'a' && asciiKey <= 'z')
+      {
+        asciiKey = asciiKey - 'a' + 'A'; // Convert to uppercase
+      }
+      else
+      {
+        // Handle shifted symbols
+        switch (kb_report->key[0])
+        {
+        case 0x1E:
+          asciiKey = '!';
+          break; // 1 -> !
+        case 0x1F:
+          asciiKey = '@';
+          break; // 2 -> @
+        case 0x20:
+          asciiKey = '#';
+          break; // 3 -> #
+        case 0x21:
+          asciiKey = '$';
+          break; // 4 -> $
+        case 0x22:
+          asciiKey = '%';
+          break; // 5 -> %
+        case 0x23:
+          asciiKey = '^';
+          break; // 6 -> ^
+        case 0x24:
+          asciiKey = '&';
+          break; // 7 -> &
+        case 0x25:
+          asciiKey = '*';
+          break; // 8 -> *
+        case 0x26:
+          asciiKey = '(';
+          break; // 9 -> (
+        case 0x27:
+          asciiKey = ')';
+          break; // 0 -> )
+        case 0x2D:
+          asciiKey = '_';
+          break; // - -> _
+        case 0x2E:
+          asciiKey = '+';
+          break; // = -> +
+        case 0x2F:
+          asciiKey = '{';
+          break; // [ -> {
+        case 0x30:
+          asciiKey = '}';
+          break; // ] -> }
+        case 0x31:
+          asciiKey = '|';
+          break; // \ -> |
+        case 0x33:
+          asciiKey = ':';
+          break; // ; -> :
+        case 0x34:
+          asciiKey = '"';
+          break; // ' -> "
+        case 0x35:
+          asciiKey = '~';
+          break; // ` -> ~
+        case 0x36:
+          asciiKey = '<';
+          break; // , -> <
+        case 0x37:
+          asciiKey = '>';
+          break; // . -> >
+        case 0x38:
+          asciiKey = '?';
+          break; // / -> ?
+        }
+      }
+    }
+
+    if (asciiKey != 0)
+    {
+      displayKeyPressed(asciiKey);
+    }
+  }
+
   // Forward to BLE
-  if (Bridge::bleDevice.isConnected()) {
+  if (Bridge::bleDevice.isConnected())
+  {
     Bridge::bleDevice.sendKeyboard(kb_report->key, kb_report->modifier.val);
   }
 }
 
-void Bridge::onMouseReport(const uint8_t *data, size_t length) {
-  if (length < 3) {
+void Bridge::onMouseReport(const uint8_t *data, size_t length)
+{
+  if (length < 3)
+  {
     return;
   }
 
@@ -59,7 +192,8 @@ void Bridge::onMouseReport(const uint8_t *data, size_t length) {
   int8_t y = (int8_t)data[2];       // Y movement (signed)
   int8_t wheel = 0;
 
-  if (length >= 4) {
+  if (length >= 4)
+  {
     wheel = (int8_t)data[3];
   }
 
@@ -68,14 +202,17 @@ void Bridge::onMouseReport(const uint8_t *data, size_t length) {
                 buttons, x, y, wheel);
 
   // Forward to BLE
-  if (Bridge::bleDevice.isConnected()) {
+  if (Bridge::bleDevice.isConnected())
+  {
     Bridge::bleDevice.sendMouse(buttons, x, y, wheel);
   }
 }
 
-void Bridge::onGenericReport(const uint8_t *data, size_t length) {
+void Bridge::onGenericReport(const uint8_t *data, size_t length)
+{
   // Handle generic HID reports (consumer control, knobs, media keys, etc)
-  if (length < 2) {
+  if (length < 2)
+  {
     return;
   }
 
@@ -84,38 +221,68 @@ void Bridge::onGenericReport(const uint8_t *data, size_t length) {
 
   // Print raw data
   Serial.printf("[GENERIC] Length: %d, ReportID: 0x%02X, Data: ", length, reportId);
-  for (size_t i = 1; i < length && i < 16; i++) {
+  for (size_t i = 1; i < length && i < 16; i++)
+  {
     Serial.printf("%02X ", data[i]);
   }
   Serial.println();
 
   // Parse Consumer Control codes (Report ID 0x04)
-  if (reportId == 0x04) {
+  if (reportId == 0x04)
+  {
     const char *consumerName = "";
 
-    switch (consumerCode) {
-      case 0xE2:
-        consumerName = "MUTE";
-        break;
-      case 0xE9:
-        consumerName = "VOLUME_UP";
-        break;
-      case 0xEA:
-        consumerName = "VOLUME_DOWN";
-        break;
-      case 0x00:
-        consumerName = "RELEASE";
-        break;
-      default:
-        consumerName = "UNKNOWN";
-        break;
+    switch (consumerCode)
+    {
+    case 0xE2:
+      consumerName = "MUTE";
+      break;
+    case 0xE9:
+      consumerName = "VOLUME_UP";
+      break;
+    case 0xEA:
+      consumerName = "VOLUME_DOWN";
+      break;
+    case 0x00:
+      consumerName = "RELEASE";
+      break;
+    default:
+      consumerName = "UNKNOWN";
+      break;
     }
 
     Serial.printf("[CONSUMER] Code: 0x%02X (%s)\n", consumerCode, consumerName);
 
     // Forward consumer control to BLE when connected
-    if (consumerCode != 0x00 && Bridge::bleDevice.isConnected()) {
+    if (consumerCode != 0x00 && Bridge::bleDevice.isConnected())
+    {
       Bridge::bleDevice.sendMedia(consumerCode);
     }
   }
+}
+
+void Bridge::sendMouseReport(uint8_t buttons, int8_t x, int8_t y, int8_t wheel)
+{
+  if (bleDevice.isConnected())
+  {
+    bleDevice.sendMouse(buttons, x, y, wheel);
+  }
+}
+
+void Bridge::sendJoystickReport(uint8_t buttons, uint8_t x, uint8_t y, uint8_t z)
+{
+  if (bleDevice.isConnected())
+  {
+    bleDevice.sendJoystick(buttons, x, y, z);
+  }
+}
+
+bool Bridge::isConnected()
+{
+  return bleDevice.isConnected();
+}
+
+std::string Bridge::getConnectedClientName()
+{
+  return bleDevice.getConnectedClientName();
 }
