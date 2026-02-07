@@ -1,13 +1,10 @@
 #include "Bridge.h"
 #include "Config.h"
 #include "Display.h"
+#include "DisplayMutex.h"
+#include "GifPlayer.h"
 #include "Joystick.h"
 #include <Arduino.h>
-
-// RGB LED pins for ESP32-S3 DevKitC-1
-#define RGB_LED_R 18
-#define RGB_LED_G 17
-#define RGB_LED_B 16
 
 void setup()
 {
@@ -25,16 +22,22 @@ void setup()
   Serial.println("Initializing display...");
   delay(500);
 
+  // Initialize display mutex for thread-safe access
+  initDisplayMutex();
+
   try
   {
     displayInit();
     Serial.println("Display initialized successfully!");
-    displayJPEG("/logo.jpg", 0, 0);
-    delay(1000);
-    displayClearScreen();
+    // displayJPEG("/cat.jpg", 0, 0);
+    // delay(1000);
+    // displayClearScreen();
+
+    // Start GIF playback on core 2
+    gifPlayerInit("/evernight2.gif");
 
     // Start key monitor on core 0
-    displayStartKeyMonitor();
+    // displayStartKeyMonitor();
   }
   catch (...)
   {
@@ -58,7 +61,7 @@ void setup()
 
 void loop()
 {
-  Bridge::loop();
+   Bridge::loop();
   // displayJoystickValues();
   // joystickControlMouse();
   // displayConnectionStatus();

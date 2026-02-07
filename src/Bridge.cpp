@@ -2,6 +2,12 @@
 #include "Display.h"
 #include <hid_usage_keyboard.h>
 
+// Battery voltage divider
+#define BAT_ADC 1
+#define R1 237000.0
+#define R2 121000.0
+#define ADC_SAMPLES 32 // Number of samples to average
+
 // HID to ASCII conversion table
 static const char HID_TO_ASCII[256] = {
     0, 0, 0, 0, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l',
@@ -35,6 +41,10 @@ void Bridge::begin()
   USBManager::setGenericCallback(onGenericReport);
   USBManager::begin();
 
+  // Configure ADC for battery monitoring
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);
+  delay(100);
   Serial.println("[System] Bridge initialized - waiting for connections...");
 }
 
@@ -56,6 +66,29 @@ void displayConnectionStatus()
   }
 }
 
+float readBatteryVoltage()
+{
+  int sum = 0;
+  for (int i = 0; i < ADC_SAMPLES; i++)
+  {
+    sum += analogRead(BAT_ADC);
+  }
+  int raw = sum / ADC_SAMPLES;
+
+  float v_adc = raw * 3.3 / 4095.0;
+  float v_bat = v_adc * (R1 + R2) / R2;
+  return v_bat;
+}
+
+int batteryLevelToPercentage(float voltage)
+{
+  // Simple linear mapping for Li-ion battery (3.0V = 0%, 4.2V = 100%)
+  if (voltage >= 4.2)
+    return 100;
+  if (voltage <= 3.0)
+    return 0;
+  return (int)((voltage - 3.0) / (4.2 - 3.0) * 100);
+}
 
 void Bridge::loop()
 {
@@ -65,7 +98,11 @@ void Bridge::loop()
   {
     lastStatusTime = millis();
     Serial.printf("[System] BLE Status: %s\n", bleDevice.isConnected() ? "CONNECTED" : "DISCONNECTED");
-    displayConnectionStatus();
+    //displayConnectionStatus();
+    float batteryVoltage = readBatteryVoltage();
+    int batteryPercent = batteryLevelToPercentage(batteryVoltage);
+    Serial.printf("[System] Battery Voltage: %.3f V (%d%%)\n", batteryVoltage, batteryPercent);
+    bleDevice.reportBatteryLevel(batteryPercent);
   }
 }
 

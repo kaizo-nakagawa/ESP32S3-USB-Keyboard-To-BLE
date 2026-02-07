@@ -200,7 +200,6 @@ void BleDevice::begin(void)
   // Enable scan response to allow full device name in separate packet
   advertising->enableScanResponse(true);
   advertising->start();
-  hid->setBatteryLevel(90);
 
   // Initialize NeoPixel after BLE to avoid RMT driver conflicts
   // initNeoPixel();

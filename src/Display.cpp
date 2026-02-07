@@ -7,6 +7,8 @@
 #include <TJpg_Decoder.h>
 #include <SPIFFS.h>
 
+#define TFT_BL 9 // TFT backlight pin
+
 TFT_eSPI tft = TFT_eSPI();
 
 unsigned long total = 0;
@@ -56,8 +58,10 @@ void displayInitSPIFFS();
 void displayInit()
 {
     Serial.println("TFT_eSPI library initializing...");
-    
+    pinMode(TFT_BL, OUTPUT);
+    digitalWrite(TFT_BL, HIGH); // Turn on backlight
     tft.init();
+    tft.setSwapBytes(true);
     
     Serial.println("TFT initialized!");
     delay(500);
