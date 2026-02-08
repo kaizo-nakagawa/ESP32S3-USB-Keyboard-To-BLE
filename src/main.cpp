@@ -1,5 +1,4 @@
 #include "Bridge.h"
-#include "Config.h"
 #include "Display.h"
 #include "DisplayMutex.h"
 #include "GifPlayer.h"

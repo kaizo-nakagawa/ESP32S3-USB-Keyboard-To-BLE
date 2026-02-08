@@ -15,9 +15,21 @@ unsigned long total = 0;
 unsigned long tn = 0;
 
 // Key monitor variables
-static QueueHandle_t keyQueue = nullptr;
-static char lastKey = '\0';
+static int keysPressed = 0;
 static unsigned long lastKeyTime = 0;
+static const unsigned long KEY_IDLE_TIMEOUT = 200; // 200ms
+static const char* BONGO_IMAGES[] = {
+  "/bongo/1.jpg",  // Idle
+  "/bongo/2.jpg",  // Multiple keys pressed
+  "/bongo/3.jpg",  // Random images
+  "/bongo/4.jpg",
+  "/bongo/5.jpg",
+  "/bongo/6.jpg",
+  "/bongo/7.jpg",
+  "/bongo/8.jpg"
+};
+static const int BONGO_COUNT = 8;
+static int currentImage = -1;  // Start with -1 (no image displayed yet)
 static const unsigned long KEY_DISPLAY_DURATION = 5000; // 5 seconds
 static const unsigned long INACTIVITY_TIMEOUT = 30000; // 30 seconds
 static unsigned long lastActivityTime = 0;
@@ -29,7 +41,16 @@ static const int KEY_DISPLAY_Y = 40;
 static const int KEY_DISPLAY_WIDTH = 240;
 static const int KEY_DISPLAY_HEIGHT = 160;
 
-// FreeRTOS task for key display on core 0
+// Queue for image requests (thread-safe communication)
+static QueueHandle_t imageQueue = nullptr;
+struct ImageRequest {
+  int imageIndex;
+};
+
+// Mutex for keysPressed counter
+static portMUX_TYPE keysMutex = portMUX_INITIALIZER_UNLOCKED;
+
+// FreeRTOS task for image display on core 0
 void keyDisplayTask(void *parameter) {
   lastActivityTime = millis(); // Initialize activity timer
   while (1) {
@@ -74,8 +95,6 @@ void keyDisplayTask(void *parameter) {
       tft.setTextSize(2);
       tft.println("Waiting...");
     }
-    
-    vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 }
 
@@ -103,7 +122,7 @@ void displayInit()
     Serial.println("Display ready for key input");
     
     // Initialize SPIFFS for JPEG storage
-    displayInitSPIFFS();
+    // displayInitSPIFFS();
 }
 
 void displayTest(void)
@@ -111,19 +130,23 @@ void displayTest(void)
     // Test function removed - using key display instead
 }
 void displayStartKeyMonitor() {
-  // Create queue for key events
-  keyQueue = xQueueCreate(5, sizeof(char));
+  // Create queue for image requests
+  imageQueue = xQueueCreate(10, sizeof(ImageRequest));
   
-  if (keyQueue == nullptr) {
-    Serial.println("[ERROR] Failed to create key queue!");
+  if (imageQueue == nullptr) {
+    Serial.println("[ERROR] Failed to create image queue!");
     return;
   }
   
-  // Create task on core 0
+  // Initialize time tracking
+  lastKeyTime = millis();
+  currentImage = -1;  // Start with no image to force initial display
+  
+  // Create task on core 0 with larger stack for JPEG decoding
   xTaskCreatePinnedToCore(
     keyDisplayTask,       // Function to run
     "KeyDisplayTask",     // Task name
-    2048,                 // Stack size
+    4096,                 // Stack size (larger for JPEG decoding)
     nullptr,              // Parameter
     1,                    // Priority
     nullptr,              // Task handle
@@ -134,13 +157,44 @@ void displayStartKeyMonitor() {
 }
 
 void displayKeyPressed(char key) {
-  if (keyQueue != nullptr) {
-    xQueueSend(keyQueue, &key, portMAX_DELAY);
+  // Update key counter with mutex protection
+  portENTER_CRITICAL(&keysMutex);
+  keysPressed++;
+  int keysPressedCopy = keysPressed;
+  portEXIT_CRITICAL(&keysMutex);
+  
+  lastKeyTime = millis();
+  
+  // Select image based on key state
+  ImageRequest request;
+  if (keysPressedCopy == 1) {
+    // Single key: show random image from 3-8 (indices 2-7)
+    request.imageIndex = 2 + (rand() % 6);
+  } else {
+    // Multiple keys: show image 2 (index 1)
+    request.imageIndex = 1;
   }
+  
+  // Send request to display task via queue
+  if (imageQueue != nullptr) {
+    xQueueSend(imageQueue, &request, 0);  // Non-blocking send
+  }
+  
+  Serial.printf("[DISPLAY] Key pressed (total: %d) - Requested image %d\n", keysPressedCopy, request.imageIndex + 1);
 }
 
 void displayKeyReleased() {
-  // Optional: can be used to clear display on key release
+  // Update key counter with mutex protection
+  portENTER_CRITICAL(&keysMutex);
+  if (keysPressed > 0) {
+    keysPressed--;
+  }
+  int keysPressedCopy = keysPressed;
+  portEXIT_CRITICAL(&keysMutex);
+  
+  lastKeyTime = millis();
+  
+  Serial.printf("[DISPLAY] Key released (total: %d)\n", keysPressedCopy);
 }
 
 // ============================================================================

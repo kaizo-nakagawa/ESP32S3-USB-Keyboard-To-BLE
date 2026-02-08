@@ -9,7 +9,6 @@
 #ifndef BRIDGE_H
 #define BRIDGE_H
 
-#include "Config.h"
 #include "USBManager.h"
 #include "BleDevice.h"
 #include <Arduino.h>

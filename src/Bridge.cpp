@@ -26,6 +26,10 @@ static const char HID_TO_ASCII[256] = {
 // Static member initialization
 BleDevice Bridge::bleDevice("Keychron Q1 Wireless", "Espressif");
 
+// Track previous keyboard state to detect releases
+static uint8_t prevKeyState[6] = {0, 0, 0, 0, 0, 0};
+static uint8_t prevModifier = 0;
+
 void Bridge::begin()
 {
   Serial.println("[System] Initializing USB-to-BLE Bridge...");
@@ -120,95 +124,61 @@ void Bridge::onKeyboardReport(const uint8_t *data, size_t length)
                 kb_report->key[2], kb_report->key[3], kb_report->key[4],
                 kb_report->key[5]);
 
-  // Extract first pressed key and convert to ASCII for display
-  if (kb_report->key[0] != 0)
-  {
-    char asciiKey = HID_TO_ASCII[kb_report->key[0]];
-
-    // Handle shift modifier for uppercase/symbols
-    if (kb_report->modifier.val & 0x02 || kb_report->modifier.val & 0x20)
-    { // Left or Right Shift
-      if (asciiKey >= 'a' && asciiKey <= 'z')
-      {
-        asciiKey = asciiKey - 'a' + 'A'; // Convert to uppercase
-      }
-      else
-      {
-        // Handle shifted symbols
-        switch (kb_report->key[0])
-        {
-        case 0x1E:
-          asciiKey = '!';
-          break; // 1 -> !
-        case 0x1F:
-          asciiKey = '@';
-          break; // 2 -> @
-        case 0x20:
-          asciiKey = '#';
-          break; // 3 -> #
-        case 0x21:
-          asciiKey = '$';
-          break; // 4 -> $
-        case 0x22:
-          asciiKey = '%';
-          break; // 5 -> %
-        case 0x23:
-          asciiKey = '^';
-          break; // 6 -> ^
-        case 0x24:
-          asciiKey = '&';
-          break; // 7 -> &
-        case 0x25:
-          asciiKey = '*';
-          break; // 8 -> *
-        case 0x26:
-          asciiKey = '(';
-          break; // 9 -> (
-        case 0x27:
-          asciiKey = ')';
-          break; // 0 -> )
-        case 0x2D:
-          asciiKey = '_';
-          break; // - -> _
-        case 0x2E:
-          asciiKey = '+';
-          break; // = -> +
-        case 0x2F:
-          asciiKey = '{';
-          break; // [ -> {
-        case 0x30:
-          asciiKey = '}';
-          break; // ] -> }
-        case 0x31:
-          asciiKey = '|';
-          break; // \ -> |
-        case 0x33:
-          asciiKey = ':';
-          break; // ; -> :
-        case 0x34:
-          asciiKey = '"';
-          break; // ' -> "
-        case 0x35:
-          asciiKey = '~';
-          break; // ` -> ~
-        case 0x36:
-          asciiKey = '<';
-          break; // , -> <
-        case 0x37:
-          asciiKey = '>';
-          break; // . -> >
-        case 0x38:
-          asciiKey = '?';
-          break; // / -> ?
+  // Detect key presses (keys in current state but not in previous)
+  for (int i = 0; i < 6; i++) {
+    if (kb_report->key[i] != 0 && prevKeyState[i] == 0 && kb_report->key[i] != prevKeyState[i]) {
+      char asciiKey = HID_TO_ASCII[kb_report->key[i]];
+      
+      // Handle shift modifier for uppercase/symbols
+      if (kb_report->modifier.val & 0x02 || kb_report->modifier.val & 0x20) { // Left or Right Shift
+        if (asciiKey >= 'a' && asciiKey <= 'z') {
+          asciiKey = asciiKey - 'a' + 'A';
+        } else {
+          // Handle shifted symbols
+          switch (kb_report->key[i]) {
+          case 0x1E: asciiKey = '!'; break;
+          case 0x1F: asciiKey = '@'; break;
+          case 0x20: asciiKey = '#'; break;
+          case 0x21: asciiKey = '$'; break;
+          case 0x22: asciiKey = '%'; break;
+          case 0x23: asciiKey = '^'; break;
+          case 0x24: asciiKey = '&'; break;
+          case 0x25: asciiKey = '*'; break;
+          case 0x26: asciiKey = '('; break;
+          case 0x27: asciiKey = ')'; break;
+          case 0x2D: asciiKey = '_'; break;
+          case 0x2E: asciiKey = '+'; break;
+          case 0x2F: asciiKey = '{'; break;
+          case 0x30: asciiKey = '}'; break;
+          case 0x31: asciiKey = '|'; break;
+          case 0x33: asciiKey = ':'; break;
+          case 0x34: asciiKey = '"'; break;
+          case 0x35: asciiKey = '~'; break;
+          case 0x36: asciiKey = '<'; break;
+          case 0x37: asciiKey = '>'; break;
+          case 0x38: asciiKey = '?'; break;
+          }
         }
       }
-    }
-
-    if (asciiKey != 0)
-    {
-      displayKeyPressed(asciiKey);
+      
+      if (asciiKey != 0) {
+        displayKeyPressed(asciiKey);
+      }
     }
   }
+  
+  // Detect key releases (keys in previous state but not in current)
+  for (int i = 0; i < 6; i++) {
+    if (prevKeyState[i] != 0 && kb_report->key[i] == 0) {
+      displayKeyReleased();
+    }
+  }
+  
+  // Update previous state
+  for (int i = 0; i < 6; i++) {
+    prevKeyState[i] = kb_report->key[i];
+  }
+  prevModifier = kb_report->modifier.val;
 
   // Forward to BLE
   if (Bridge::bleDevice.isConnected())
