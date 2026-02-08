@@ -19,28 +19,56 @@ static QueueHandle_t keyQueue = nullptr;
 static char lastKey = '\0';
 static unsigned long lastKeyTime = 0;
 static const unsigned long KEY_DISPLAY_DURATION = 5000; // 5 seconds
+static const unsigned long INACTIVITY_TIMEOUT = 30000; // 30 seconds
+static unsigned long lastActivityTime = 0;
+
+// Display region for keys (to avoid full screen flicker)
+// Make this larger to fully cover text at different sizes
+static const int KEY_DISPLAY_X = 40;
+static const int KEY_DISPLAY_Y = 40;
+static const int KEY_DISPLAY_WIDTH = 240;
+static const int KEY_DISPLAY_HEIGHT = 160;
 
 // FreeRTOS task for key display on core 0
 void keyDisplayTask(void *parameter) {
+  lastActivityTime = millis(); // Initialize activity timer
   while (1) {
     // Check queue for new keys
     char receivedKey;
     if (xQueueReceive(keyQueue, &receivedKey, portMAX_DELAY)) {
       lastKey = receivedKey;
       lastKeyTime = millis();
+      lastActivityTime = millis(); // Reset inactivity timer
       
-      // Display the key - overwrite without clearing screen
-      tft.setCursor(tft.width() / 2 - 40, tft.height() / 2 - 40);
-      tft.setTextColor(TFT_WHITE);
+      // Turn on backlight if it was off
+      digitalWrite(TFT_BL, HIGH);
+      
+      // Clear only the key display region instead of entire screen
+      tft.fillRect(KEY_DISPLAY_X, KEY_DISPLAY_Y, KEY_DISPLAY_WIDTH, KEY_DISPLAY_HEIGHT, TFT_WHITE);
+      
+      // Display the key
+      tft.setCursor(tft.width() / 2 - 30, tft.height() / 2 - 40);
+      tft.setTextColor(TFT_BLACK);
       tft.setTextSize(10);
       tft.print(receivedKey);
       
       Serial.printf("[DISPLAY] Showing key: %c\n", receivedKey);
     }
     
-    // Check if key display should be cleared
-    if (lastKey != '\0' && (millis() - lastKeyTime) > KEY_DISPLAY_DURATION) {
+    // Check if display should be turned off due to inactivity (30 seconds)
+    if ((millis() - lastActivityTime) > INACTIVITY_TIMEOUT) {
       lastKey = '\0';
+      digitalWrite(TFT_BL, LOW); // Turn off backlight
+      tft.fillRect(KEY_DISPLAY_X, KEY_DISPLAY_Y, KEY_DISPLAY_WIDTH, KEY_DISPLAY_HEIGHT, TFT_WHITE);
+      Serial.println("[DISPLAY] Display turned off due to inactivity");
+      lastActivityTime = millis(); // Reset to avoid repeated logging
+    }
+    // Check if key display should be cleared (5 second timeout)
+    else if (lastKey != '\0' && (millis() - lastKeyTime) > KEY_DISPLAY_DURATION) {
+      lastKey = '\0';
+      // Clear only the key display region
+      tft.fillRect(KEY_DISPLAY_X, KEY_DISPLAY_Y, KEY_DISPLAY_WIDTH, KEY_DISPLAY_HEIGHT, TFT_WHITE);
+      
       tft.setCursor(tft.width() / 2 - 50, tft.height() / 2);
       tft.setTextColor(TFT_LIGHTGREY);
       tft.setTextSize(2);
@@ -67,12 +95,11 @@ void displayInit()
     delay(500);
 
     tft.setRotation(2);
-    tft.fillScreen(TFT_BLACK);
-    tft.setCursor(tft.width() / 2 - 60, tft.height() / 2);
+    tft.fillScreen(TFT_WHITE);
+    tft.setCursor(tft.width() / 2 - 65, tft.height() / 2);
     tft.setTextColor(TFT_LIGHTGREY);
     tft.setTextSize(2);
     tft.println("Keychron Q1");
-    
     Serial.println("Display ready for key input");
     
     // Initialize SPIFFS for JPEG storage
@@ -140,7 +167,7 @@ void displayInitSPIFFS() {
 void displayJPEG(const char* filename, int x, int y) {
   if (!SPIFFS.exists(filename)) {
     Serial.printf("[ERROR] File not found: %s\n", filename);
-    tft.fillScreen(TFT_BLACK);
+    tft.fillScreen(TFT_WHITE);
     tft.setCursor(10, 10);
     tft.setTextColor(TFT_RED);
     tft.setTextSize(2);
@@ -161,7 +188,7 @@ void displayJPEG(const char* filename, int x, int y) {
 
 // Clear the display screen
 void displayClearScreen() {
-  tft.fillScreen(TFT_BLACK);
+  tft.fillScreen(TFT_WHITE);
   Serial.println("[DISPLAY] Screen cleared");
 }
 

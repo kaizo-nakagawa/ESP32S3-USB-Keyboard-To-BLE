@@ -18,26 +18,25 @@ void setup()
   Serial.println("╚════════════════════════════════════════════════╝");
   Serial.println();
 
-  // Initialize SPI explicitly for display
-  Serial.println("Initializing display...");
-  delay(500);
-
-  // Initialize display mutex for thread-safe access
-  initDisplayMutex();
-
   try
   {
+    // Initialize SPI explicitly for display
+    // Serial.println("Initializing display...");
+    // delay(500);
+
+    // // Initialize display mutex for thread-safe access
+    // initDisplayMutex();
     displayInit();
-    Serial.println("Display initialized successfully!");
+    // Serial.println("Display initialized successfully!");
     // displayJPEG("/cat.jpg", 0, 0);
-    // delay(1000);
-    // displayClearScreen();
+    delay(1000);
+    displayClearScreen();
 
     // Start GIF playback on core 2
-    gifPlayerInit("/evernight2.gif");
+    // gifPlayerInit("/evernight2.gif");
 
     // Start key monitor on core 0
-    // displayStartKeyMonitor();
+    displayStartKeyMonitor();
   }
   catch (...)
   {
@@ -45,7 +44,7 @@ void setup()
   }
 
   delay(1000);
-  
+
   // Initialize joystick
   // Serial.println("Initializing joystick...");
   // joystickInit();
@@ -61,7 +60,7 @@ void setup()
 
 void loop()
 {
-   Bridge::loop();
+  Bridge::loop();
   // displayJoystickValues();
   // joystickControlMouse();
   // displayConnectionStatus();

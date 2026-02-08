@@ -5,8 +5,8 @@
 
 // Joystick pin definitions
 #define JOYSTICK_VRY_PIN 4   // Analog X axis
-#define JOYSTICK_VRX_PIN 5   // Analog Y axis
-#define JOYSTICK_BTN_PIN 15  // Digital button
+#define JOYSTICK_VRX_PIN 15   // Analog Y axis
+#define JOYSTICK_BTN_PIN 5  // Digital button
 
 // Joystick initialization
 void joystickInit();
