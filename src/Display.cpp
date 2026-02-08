@@ -125,7 +125,7 @@ void displayInit()
     Serial.println("Display ready for key input");
     
     // Initialize SPIFFS for JPEG storage
-    // displayInitSPIFFS();
+    displayInitSPIFFS();
 }
 
 void displayTest(void)

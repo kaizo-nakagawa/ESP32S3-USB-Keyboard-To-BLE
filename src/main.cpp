@@ -27,7 +27,7 @@ void setup()
     // initDisplayMutex();
     displayInit();
     // Serial.println("Display initialized successfully!");
-    // displayJPEG("/cat.jpg", 0, 0);
+    displayJPEG("/logo.jpg", 0, 0);
     delay(1000);
     displayClearScreen();
 
