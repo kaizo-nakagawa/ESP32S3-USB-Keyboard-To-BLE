@@ -33,6 +33,9 @@ static int currentImage = -1;  // Start with -1 (no image displayed yet)
 static const unsigned long KEY_DISPLAY_DURATION = 5000; // 5 seconds
 static const unsigned long INACTIVITY_TIMEOUT = 30000; // 30 seconds
 static unsigned long lastActivityTime = 0;
+static char lastKey = '\0';
+// Queue for key display
+static QueueHandle_t keyQueue = xQueueCreate(10, sizeof(char));
 
 // Display region for keys (to avoid full screen flicker)
 // Make this larger to fully cover text at different sizes
