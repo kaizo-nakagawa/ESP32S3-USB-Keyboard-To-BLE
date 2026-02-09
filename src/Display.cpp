@@ -31,7 +31,7 @@ static const char* BONGO_IMAGES[] = {
 static const int BONGO_COUNT = 8;
 static int currentImage = -1;  // Start with -1 (no image displayed yet)
 static const unsigned long KEY_DISPLAY_DURATION = 5000; // 5 seconds
-static const unsigned long INACTIVITY_TIMEOUT = 30000; // 30 seconds
+static const unsigned long INACTIVITY_TIMEOUT = 60000; // 30 seconds
 static unsigned long lastActivityTime = 0;
 static char lastKey = '\0';
 // Queue for key display
@@ -48,61 +48,71 @@ static const int KEY_DISPLAY_HEIGHT = 160;
 static QueueHandle_t imageQueue = nullptr;
 struct ImageRequest {
   int imageIndex;
+  char keyChar;
 };
 
 // Mutex for keysPressed counter
 static portMUX_TYPE keysMutex = portMUX_INITIALIZER_UNLOCKED;
 
-// FreeRTOS task for image display on core 0
+// FreeRTOS task for bongo image display on core 0
 void keyDisplayTask(void *parameter) {
   lastActivityTime = millis(); // Initialize activity timer
+  
+  // Show idle bongo image on startup
+  displayJPEG(BONGO_IMAGES[0], 0, 0);
+  currentImage = 0;
+  
   while (1) {
-    // Check queue for new keys
-    char receivedKey;
-    if (xQueueReceive(keyQueue, &receivedKey, portMAX_DELAY)) {
-      lastKey = receivedKey;
+    // Check queue for new image requests (with timeout to handle idle state)
+    ImageRequest request;
+    if (xQueueReceive(imageQueue, &request, pdMS_TO_TICKS(KEY_IDLE_TIMEOUT))) {
       lastKeyTime = millis();
       lastActivityTime = millis(); // Reset inactivity timer
       
       // Turn on backlight if it was off
       digitalWrite(TFT_BL, HIGH);
       
-      // Clear only the key display region instead of entire screen
-      tft.fillRect(KEY_DISPLAY_X, KEY_DISPLAY_Y, KEY_DISPLAY_WIDTH, KEY_DISPLAY_HEIGHT, TFT_WHITE);
+      // Only update display if image changed
+      if (currentImage != request.imageIndex) {
+        currentImage = request.imageIndex;
+        displayJPEG(BONGO_IMAGES[currentImage], 0, 0);
+        Serial.printf("[DISPLAY] Showing bongo image: %s\n", BONGO_IMAGES[currentImage]);
+      }
       
-      // Display the key
-      tft.setCursor(tft.width() / 2 - 30, tft.height() / 2 - 40);
-      tft.setTextColor(TFT_BLACK);
-      tft.setTextSize(10);
-      tft.print(receivedKey);
+      // Display the key character centered on screen
+      if (request.keyChar != '\0') {
+        tft.setCursor(tft.width() / 2 - 20, tft.height() / 2 - 100);
+        tft.setTextColor(TFT_DARKGREY);
+        tft.setTextSize(10);
+        tft.print(request.keyChar);
+      }
       
-      Serial.printf("[DISPLAY] Showing key: %c\n", receivedKey);
+    }
+    
+    
+    // Check if we should return to idle image (no keys pressed for KEY_IDLE_TIMEOUT)
+    portENTER_CRITICAL(&keysMutex);
+    int keysPressedCopy = keysPressed;
+    portEXIT_CRITICAL(&keysMutex);
+    
+    if (keysPressedCopy == 0 && currentImage != 0 && (millis() - lastKeyTime) > KEY_IDLE_TIMEOUT) {
+      currentImage = 0;
+      displayJPEG(BONGO_IMAGES[0], 0, 0);
+      Serial.println("[DISPLAY] Showing idle bongo image");
     }
     
     // Check if display should be turned off due to inactivity (30 seconds)
     if ((millis() - lastActivityTime) > INACTIVITY_TIMEOUT) {
-      lastKey = '\0';
       digitalWrite(TFT_BL, LOW); // Turn off backlight
-      tft.fillRect(KEY_DISPLAY_X, KEY_DISPLAY_Y, KEY_DISPLAY_WIDTH, KEY_DISPLAY_HEIGHT, TFT_WHITE);
       Serial.println("[DISPLAY] Display turned off due to inactivity");
       lastActivityTime = millis(); // Reset to avoid repeated logging
-    }
-    // Check if key display should be cleared (5 second timeout)
-    else if (lastKey != '\0' && (millis() - lastKeyTime) > KEY_DISPLAY_DURATION) {
-      lastKey = '\0';
-      // Clear only the key display region
-      tft.fillRect(KEY_DISPLAY_X, KEY_DISPLAY_Y, KEY_DISPLAY_WIDTH, KEY_DISPLAY_HEIGHT, TFT_WHITE);
-      
-      tft.setCursor(tft.width() / 2 - 50, tft.height() / 2);
-      tft.setTextColor(TFT_LIGHTGREY);
-      tft.setTextSize(2);
-      tft.println("Waiting...");
     }
   }
 }
 
 // Forward declarations for SPIFFS functions
 void displayInitSPIFFS();
+void displayJPEG(const char* filename, int x, int y);
 
 // Initialize display
 void displayInit()
@@ -170,6 +180,7 @@ void displayKeyPressed(char key) {
   
   // Select image based on key state
   ImageRequest request;
+  request.keyChar = key;
   if (keysPressedCopy == 1) {
     // Single key: show random image from 3-8 (indices 2-7)
     request.imageIndex = 2 + (rand() % 6);
@@ -196,6 +207,14 @@ void displayKeyReleased() {
   portEXIT_CRITICAL(&keysMutex);
   
   lastKeyTime = millis();
+  
+  // If still have keys pressed, update image (switch from multi-key to single-key image)
+  if (keysPressedCopy == 1 && imageQueue != nullptr) {
+    ImageRequest request;
+    request.imageIndex = 2 + (rand() % 6);  // Random image 3-8
+    request.keyChar = '\0';  // No key char on release
+    xQueueSend(imageQueue, &request, 0);
+  }
   
   Serial.printf("[DISPLAY] Key released (total: %d)\n", keysPressedCopy);
 }

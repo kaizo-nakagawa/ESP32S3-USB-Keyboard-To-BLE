@@ -27,9 +27,9 @@ void setup()
     // initDisplayMutex();
     displayInit();
     // Serial.println("Display initialized successfully!");
-    displayJPEG("/logo.jpg", 0, 0);
-    delay(1000);
-    displayClearScreen();
+    // displayJPEG("/logo.jpg", 0, 0);
+    // delay(1000);
+    // displayClearScreen();
 
     // Start GIF playback on core 2
     // gifPlayerInit("/evernight2.gif");
@@ -42,7 +42,7 @@ void setup()
     Serial.println("ERROR: Display initialization failed!");
   }
 
-  delay(1000);
+  // delay(1000);
 
   // Initialize joystick
   // Serial.println("Initializing joystick...");
