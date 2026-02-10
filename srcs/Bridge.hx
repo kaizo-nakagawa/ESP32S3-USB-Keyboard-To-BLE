@@ -9,9 +9,9 @@
 #ifndef BRIDGE_H
 #define BRIDGE_H
 
-#include "USBManager.h"
-#include "BleDevice.h"
 #include <Arduino.h>
+// #include "USBManager.h"
+// #include "BleDevice.h"
 
 /**
  * @class Bridge
@@ -47,7 +47,7 @@ public:
   static std::string getConnectedClientName();
 
 private:
-  static BleDevice bleDevice;
+  // static BleDevice bleDevice;
 };
 
 #endif // BRIDGE_H

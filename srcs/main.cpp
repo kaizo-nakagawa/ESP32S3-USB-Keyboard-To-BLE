@@ -1,13 +1,10 @@
 #include <Arduino.h>
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wconflicting-declaration"
-
-#include "USBManager.h"
 #include "USBKeyboard.h"
-
-#pragma GCC diagnostic pop
-
+#include "Display.h"
+#include "DisplayMutex.h"
+#include "GifPlayer.h"
+#include "Joystick.h"
+#include "USBManager.h"
 
 // Forward declarations for USB callbacks
 void onKeyboardReport(const uint8_t *data, size_t length);
@@ -26,32 +23,32 @@ void setup()
   Serial.println("╚════════════════════════════════════════════════╝");
   Serial.println();
 
-  // try
-  // {
-  //   // Initialize SPI explicitly for display
-  //   // Serial.println("Initializing display...");
-  //   // delay(500);
+  try
+  {
+    // Initialize SPI explicitly for display
+    // Serial.println("Initializing display...");
+    // delay(500);
 
-  //   // // Initialize display mutex for thread-safe access
-  //   // initDisplayMutex();
-  //   // displayInit();
-  //   // // Serial.println("Display initialized successfully!");
-  //   // displayJPEG("/logo.jpg", 0, 0);
-  //   // delay(1000);
-  //   // displayClearScreen();
+    // // Initialize display mutex for thread-safe access
+    // initDisplayMutex();
+    displayInit();
+    // Serial.println("Display initialized successfully!");
+    displayJPEG("/logo.jpg", 0, 0);
+    delay(1000);
+    displayClearScreen();
 
-  //   // Start GIF playback on core 2
-  //   // gifPlayerInit("/evernight2.gif");
+    // Start GIF playback on core 2
+    // gifPlayerInit("/evernight2.gif");
 
-  //   // Start key monitor on core 0
-  //   // displayStartKeyMonitor();
-  // }
-  // catch (...)
-  // {
-  //   Serial.println("ERROR: Display initialization failed!");
-  // }
+    // Start key monitor on core 0
+    displayStartKeyMonitor();
+  }
+  catch (...)
+  {
+    Serial.println("ERROR: Display initialization failed!");
+  }
 
-  // delay(1000);
+  delay(1000);
 
   // Initialize joystick
   // Serial.println("Initializing joystick...");

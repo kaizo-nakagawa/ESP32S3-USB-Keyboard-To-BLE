@@ -118,12 +118,20 @@ void Bridge::onKeyboardReport(const uint8_t *data, size_t length)
   hid_keyboard_input_report_boot_t *kb_report =
       (hid_keyboard_input_report_boot_t *)data;
 
+      // Forward to BLE
+  if (Bridge::bleDevice.isConnected())
+  {
+    Bridge::bleDevice.sendKeyboard(kb_report->key, kb_report->modifier.val);
+  }
+
+
   // Print intercepted keyboard data
   Serial.printf("[KEYBOARD] Modifier: 0x%02X | Keys: [%02X %02X %02X %02X %02X %02X]\n",
                 kb_report->modifier.val, kb_report->key[0], kb_report->key[1],
                 kb_report->key[2], kb_report->key[3], kb_report->key[4],
                 kb_report->key[5]);
 
+ 
   // Detect key presses (keys in current state but not in previous)
   for (int i = 0; i < 6; i++) {
     if (kb_report->key[i] != 0 && prevKeyState[i] == 0 && kb_report->key[i] != prevKeyState[i]) {
@@ -180,11 +188,6 @@ void Bridge::onKeyboardReport(const uint8_t *data, size_t length)
   }
   prevModifier = kb_report->modifier.val;
 
-  // Forward to BLE
-  if (Bridge::bleDevice.isConnected())
-  {
-    Bridge::bleDevice.sendKeyboard(kb_report->key, kb_report->modifier.val);
-  }
 }
 
 void Bridge::onMouseReport(const uint8_t *data, size_t length)

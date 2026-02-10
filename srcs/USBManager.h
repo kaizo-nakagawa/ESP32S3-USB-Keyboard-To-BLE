@@ -8,22 +8,10 @@
 
 #include <Arduino.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wconflicting-declaration"
-#pragma GCC diagnostic ignored "-Walready-declared"
-
-#include "hid_host.h"
-#include "usb/usb_host.h"
-
-#pragma GCC diagnostic pop
-
-#ifdef __cplusplus
-}
-#endif
+// Forward declarations for opaque HID types
+typedef void* hid_host_device_handle_t;
+typedef unsigned int hid_host_driver_event_t;
+typedef unsigned int hid_host_interface_event_t;
 
 /** @brief Callback type for keyboard reports. */
 typedef void (*KeyboardReportCallback)(const uint8_t *data, size_t length);
