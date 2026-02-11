@@ -1,287 +1,425 @@
-#include "SPI.h"
-#include "TFT_eSPI.h"
 #include "Display.h"
+#include <LittleFS.h>
+#include <SPI.h>
+#include <TFT_eFEX.h>
+#include <TFT_eSPI.h>
+
 #include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 #include <freertos/queue.h>
-#include <TJpg_Decoder.h>
-#include <SPIFFS.h>
+#include <freertos/task.h>
 
-#define TFT_BL 9 // TFT backlight pin
+#define TFT_BL 9
 
-TFT_eSPI tft = TFT_eSPI();
+TFT_eSPI tft;
+TFT_eFEX fex(&tft);
 
-unsigned long total = 0;
-unsigned long tn = 0;
+// =====================================================
+// STATE
+// =====================================================
 
-// Key monitor variables
 static int keysPressed = 0;
 static unsigned long lastKeyTime = 0;
-static const unsigned long KEY_IDLE_TIMEOUT = 200; // 200ms
-static const char* BONGO_IMAGES[] = {
-  "/bongo/1.jpg",  // Idle
-  "/bongo/2.jpg",  // Multiple keys pressed
-  "/bongo/3.jpg",  // Random images
-  "/bongo/4.jpg",
-  "/bongo/5.jpg",
-  "/bongo/6.jpg",
-  "/bongo/7.jpg",
-  "/bongo/8.jpg"
-};
-static const int BONGO_COUNT = 8;
-static int currentImage = -1;  // Start with -1 (no image displayed yet)
-static const unsigned long KEY_DISPLAY_DURATION = 5000; // 5 seconds
-static const unsigned long INACTIVITY_TIMEOUT = 60000; // 30 seconds
 static unsigned long lastActivityTime = 0;
-static char lastKey = '\0';
-// Queue for key display
-static QueueHandle_t keyQueue = xQueueCreate(10, sizeof(char));
 
-// Display region for keys (to avoid full screen flicker)
-// Make this larger to fully cover text at different sizes
-static const int KEY_DISPLAY_X = 40;
-static const int KEY_DISPLAY_Y = 40;
-static const int KEY_DISPLAY_WIDTH = 240;
-static const int KEY_DISPLAY_HEIGHT = 160;
+static const unsigned long KEY_IDLE_TIMEOUT = 200;
+static const unsigned long INACTIVITY_TIMEOUT = 120000;
 
-// Queue for image requests (thread-safe communication)
+// -----------------------------------------------------
+
+static const char *BONGO_IMAGES[] = {
+    "/bongo/1.jpg", "/bongo/2.jpg", "/bongo/3.jpg", "/bongo/4.jpg",
+    "/bongo/5.jpg", "/bongo/6.jpg", "/bongo/7.jpg", "/bongo/8.jpg"};
+
+static const int BONGO_COUNT = sizeof(BONGO_IMAGES) / sizeof(BONGO_IMAGES[0]);
+
+static int currentImage = -1;
+
+// =====================================================
+// PSRAM CACHE
+// =====================================================
+
+static uint8_t *bongoCache[BONGO_COUNT] = {0};
+static size_t bongoSize[BONGO_COUNT] = {0};
+
+static uint8_t *btIconConnected = nullptr;
+static size_t btIconConnectedSize = 0;
+
+static uint8_t *btIconDisconnected = nullptr;
+static size_t btIconDisconnectedSize = 0;
+
+static const int IMAGE_PADDING = 120;
+
+// =====================================================
+// SYNC
+// =====================================================
+
+SemaphoreHandle_t tftMutex;
+SemaphoreHandle_t keysMutex;
+
+// =====================================================
+// QUEUE
+// =====================================================
+
 static QueueHandle_t imageQueue = nullptr;
-struct ImageRequest {
+static QueueHandle_t statusBarQueue = nullptr;
+
+struct ImageRequest
+{
   int imageIndex;
   char keyChar;
 };
 
-// Mutex for keysPressed counter
-static portMUX_TYPE keysMutex = portMUX_INITIALIZER_UNLOCKED;
-
-// FreeRTOS task for bongo image display on core 0
-void keyDisplayTask(void *parameter) {
-  lastActivityTime = millis(); // Initialize activity timer
-  
-  // Show idle bongo image on startup
-  displayJPEG(BONGO_IMAGES[0], 0, 0);
-  currentImage = 0;
-  
-  while (1) {
-    // Check queue for new image requests (with timeout to handle idle state)
-    ImageRequest request;
-    if (xQueueReceive(imageQueue, &request, pdMS_TO_TICKS(KEY_IDLE_TIMEOUT))) {
-      lastKeyTime = millis();
-      lastActivityTime = millis(); // Reset inactivity timer
-      
-      // Turn on backlight if it was off
-      digitalWrite(TFT_BL, HIGH);
-      
-      // Only update display if image changed
-      if (currentImage != request.imageIndex) {
-        currentImage = request.imageIndex;
-        displayJPEG(BONGO_IMAGES[currentImage], 0, 0);
-        Serial.printf("[DISPLAY] Showing bongo image: %s\n", BONGO_IMAGES[currentImage]);
-      }
-      
-      // Display the key character centered on screen
-      if (request.keyChar != '\0') {
-        tft.setCursor(tft.width() / 2 - 20, tft.height() / 2 - 100);
-        tft.setTextColor(TFT_DARKGREY);
-        tft.setTextSize(10);
-        tft.print(request.keyChar);
-      }
-      
-    }
-    
-    
-    // Check if we should return to idle image (no keys pressed for KEY_IDLE_TIMEOUT)
-    portENTER_CRITICAL(&keysMutex);
-    int keysPressedCopy = keysPressed;
-    portEXIT_CRITICAL(&keysMutex);
-    
-    if (keysPressedCopy == 0 && currentImage != 0 && (millis() - lastKeyTime) > KEY_IDLE_TIMEOUT) {
-      currentImage = 0;
-      displayJPEG(BONGO_IMAGES[0], 0, 0);
-      Serial.println("[DISPLAY] Showing idle bongo image");
-    }
-    
-    // Check if display should be turned off due to inactivity (30 seconds)
-    if ((millis() - lastActivityTime) > INACTIVITY_TIMEOUT) {
-      digitalWrite(TFT_BL, LOW); // Turn off backlight
-      Serial.println("[DISPLAY] Display turned off due to inactivity");
-      lastActivityTime = millis(); // Reset to avoid repeated logging
-    }
-  }
-}
-
-// Forward declarations for SPIFFS functions
-void displayInitSPIFFS();
-void displayJPEG(const char* filename, int x, int y);
-
-// Initialize display
-void displayInit()
+struct StatusBarRequest
 {
-    Serial.println("TFT_eSPI library initializing...");
-    pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, HIGH); // Turn on backlight
-    tft.init();
-    tft.setSwapBytes(true);
-    
-    Serial.println("TFT initialized!");
-    delay(500);
+  bool isConnected;
+  int batteryPercent;
+};
 
-    tft.setRotation(2);
-    tft.fillScreen(TFT_WHITE);
-    tft.setCursor(tft.width() / 2 - 65, tft.height() / 2);
-    tft.setTextColor(TFT_LIGHTGREY);
-    tft.setTextSize(2);
-    tft.println("Keychron Q1");
-    Serial.println("Display ready for key input");
-    
-    // Initialize SPIFFS for JPEG storage
-    displayInitSPIFFS();
-}
+// =====================================================
 
-void displayTest(void)
+static const int STATUSBAR_HEIGHT = 40;
+
+static bool lastConnectionState = false;
+static int lastBatteryPercent = -1;
+
+// =====================================================
+// PSRAM LOADER
+// =====================================================
+
+static bool loadFileToPSRAM(const char *path, uint8_t **buffer, size_t *size)
 {
-    // Test function removed - using key display instead
-}
-void displayStartKeyMonitor() {
-  // Create queue for image requests
-  imageQueue = xQueueCreate(10, sizeof(ImageRequest));
-  
-  if (imageQueue == nullptr) {
-    Serial.println("[ERROR] Failed to create image queue!");
-    return;
+  File f = LittleFS.open(path, "r");
+  if (!f)
+  {
+    Serial.printf("[PSRAM] Open failed %s\n", path);
+    return false;
   }
-  
-  // Initialize time tracking
-  lastKeyTime = millis();
-  currentImage = -1;  // Start with no image to force initial display
-  
-  // Create task on core 0 with larger stack for JPEG decoding
-  xTaskCreatePinnedToCore(
-    keyDisplayTask,       // Function to run
-    "KeyDisplayTask",     // Task name
-    4096,                 // Stack size (larger for JPEG decoding)
-    nullptr,              // Parameter
-    1,                    // Priority
-    nullptr,              // Task handle
-    0                     // Core 0
-  );
-  
-  Serial.println("[DISPLAY] Key monitor started on core 0");
-}
 
-void displayKeyPressed(char key) {
-  // Update key counter with mutex protection
-  portENTER_CRITICAL(&keysMutex);
-  keysPressed++;
-  int keysPressedCopy = keysPressed;
-  portEXIT_CRITICAL(&keysMutex);
-  
-  lastKeyTime = millis();
-  
-  // Select image based on key state
-  ImageRequest request;
-  request.keyChar = key;
-  if (keysPressedCopy == 1) {
-    // Single key: show random image from 3-8 (indices 2-7)
-    request.imageIndex = 2 + (rand() % 6);
-  } else {
-    // Multiple keys: show image 2 (index 1)
-    request.imageIndex = 1;
-  }
-  
-  // Send request to display task via queue
-  if (imageQueue != nullptr) {
-    xQueueSend(imageQueue, &request, 0);  // Non-blocking send
-  }
-  
-  Serial.printf("[DISPLAY] Key pressed (total: %d) - Requested image %d\n", keysPressedCopy, request.imageIndex + 1);
-}
+  *size = f.size();
 
-void displayKeyReleased() {
-  // Update key counter with mutex protection
-  portENTER_CRITICAL(&keysMutex);
-  if (keysPressed > 0) {
-    keysPressed--;
-  }
-  int keysPressedCopy = keysPressed;
-  portEXIT_CRITICAL(&keysMutex);
-  
-  lastKeyTime = millis();
-  
-  // If still have keys pressed, update image (switch from multi-key to single-key image)
-  if (keysPressedCopy == 1 && imageQueue != nullptr) {
-    ImageRequest request;
-    request.imageIndex = 2 + (rand() % 6);  // Random image 3-8
-    request.keyChar = '\0';  // No key char on release
-    xQueueSend(imageQueue, &request, 0);
-  }
-  
-  Serial.printf("[DISPLAY] Key released (total: %d)\n", keysPressedCopy);
-}
+  *buffer =
+      (uint8_t *)heap_caps_malloc(*size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
-// ============================================================================
-// SPIFFS JPEG Display Functions
-// ============================================================================
+  if (!*buffer)
+  {
+    Serial.printf("[PSRAM] malloc failed %s (%u)\n", path, *size);
+    f.close();
+    return false;
+  }
 
-// Callback function for TJpgDec to output image data to TFT
-static bool tftJpegOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
-  if (y >= tft.height()) return false;
-  tft.pushImage(x, y, w, h, bitmap);
+  f.read(*buffer, *size);
+  f.close();
+
+  Serial.printf("[PSRAM] Cached %s (%u bytes)\n", path, *size);
+
   return true;
 }
 
-// Initialize SPIFFS
-void displayInitSPIFFS() {
-  if (!SPIFFS.begin(true)) {
-    Serial.println("[ERROR] SPIFFS Mount Failed!");
-    return;
+// =====================================================
+// PRELOAD
+// =====================================================
+
+static void preloadImagesToPSRAM()
+{
+  Serial.println("[PSRAM] Preloading images...");
+
+  for (int i = 0; i < BONGO_COUNT; i++)
+  {
+    loadFileToPSRAM(BONGO_IMAGES[i], &bongoCache[i], &bongoSize[i]);
   }
-  Serial.println("[SPIFFS] Mounted successfully");
+
+  loadFileToPSRAM("/icons/con.jpg", &btIconConnected, &btIconConnectedSize);
+
+  loadFileToPSRAM("/icons/dis.jpg", &btIconDisconnected,
+                  &btIconDisconnectedSize);
+
+  Serial.println("[PSRAM] Image preload done");
 }
 
-// Display JPEG image from SPIFFS
-void displayJPEG(const char* filename, int x, int y) {
-  if (!SPIFFS.exists(filename)) {
-    Serial.printf("[ERROR] File not found: %s\n", filename);
+// =====================================================
+// JPEG DRAW
+// =====================================================
+
+void drawStatusBar(bool isConnected, int batteryPercent);
+
+static void drawJpegFromPSRAM(int x, int y, uint8_t *buf, size_t len)
+{
+  if (!buf || !len)
+    return;
+
+  if (!xSemaphoreTake(tftMutex, portMAX_DELAY))
+    return;
+  fex.drawJpeg(buf, len, x, y);
+
+  xSemaphoreGive(tftMutex);
+}
+
+void displayJPEG(const char *filename, int x, int y)
+{
+  for (int i = 0; i < BONGO_COUNT; i++)
+  {
+    if (!strcmp(filename, BONGO_IMAGES[i]) && bongoCache[i])
+    {
+
+      drawJpegFromPSRAM(x, y, bongoCache[i], bongoSize[i]);
+      return;
+    }
+  }
+
+  if (!strcmp(filename, "/icons/con.jpg") && btIconConnected)
+  {
+
+    drawJpegFromPSRAM(x, y, btIconConnected, btIconConnectedSize);
+    return;
+  }
+
+  if (!strcmp(filename, "/icons/dis.jpg") && btIconDisconnected)
+  {
+
+    drawJpegFromPSRAM(x, y, btIconDisconnected, btIconDisconnectedSize);
+    return;
+  }
+
+  // fallback SPIFFS
+  if (xSemaphoreTake(tftMutex, portMAX_DELAY))
+  {
+    fex.drawJpeg(filename, x, y);
+    xSemaphoreGive(tftMutex);
+  }
+}
+
+// =====================================================
+// DISPLAY TASK
+// =====================================================
+
+static void keyDisplayTask(void *parameter)
+{
+  lastActivityTime = millis();
+
+  ImageRequest imgReq;
+  StatusBarRequest statusReq;
+
+  while (1)
+  {
+
+    // ---------- STATUS BAR ----------
+    if (statusBarQueue &&
+        xQueueReceive(statusBarQueue, &statusReq, pdMS_TO_TICKS(50)))
+    {
+      if (statusReq.isConnected != lastConnectionState ||
+          statusReq.batteryPercent != lastBatteryPercent)
+      {
+        lastConnectionState = statusReq.isConnected;
+        lastBatteryPercent = statusReq.batteryPercent;
+
+        drawStatusBar(statusReq.isConnected, statusReq.batteryPercent);
+      }
+      continue;
+    }
+
+    // ---------- IMAGE ----------
+    if (imageQueue &&
+        xQueueReceive(imageQueue, &imgReq, pdMS_TO_TICKS(KEY_IDLE_TIMEOUT)))
+    {
+      lastKeyTime = millis();
+      lastActivityTime = millis();
+
+      digitalWrite(TFT_BL, HIGH);
+
+      if (currentImage != imgReq.imageIndex)
+      {
+        currentImage = imgReq.imageIndex;
+        displayJPEG(BONGO_IMAGES[currentImage], 0,
+                    STATUSBAR_HEIGHT + IMAGE_PADDING);
+      }
+
+      if (xSemaphoreTake(tftMutex, pdMS_TO_TICKS(50)))
+      {
+        if (imgReq.keyChar)
+        {
+          tft.setTextSize(10);
+          tft.setTextColor(TFT_DARKGREY);
+          tft.fillRect(tft.width() / 2 - 20, STATUSBAR_HEIGHT + 40, 60, 60,
+                       TFT_WHITE);
+          tft.setCursor(tft.width() / 2 - 20, STATUSBAR_HEIGHT + 40);
+          tft.print(imgReq.keyChar);
+        }
+        xSemaphoreGive(tftMutex);
+      }
+    }
+
+    // ---------- IDLE ----------
+    if (xSemaphoreTake(keysMutex, 10))
+    {
+      int copy = keysPressed;
+      xSemaphoreGive(keysMutex);
+
+      if (copy == 0 && millis() - lastKeyTime > KEY_IDLE_TIMEOUT)
+      {
+        if (currentImage != 0)
+        {
+          currentImage = 0;
+          tft.fillRect(tft.width() / 2 - 20, STATUSBAR_HEIGHT + 40, 60, 60,
+                       TFT_WHITE);
+          displayJPEG(BONGO_IMAGES[0], 0, STATUSBAR_HEIGHT + IMAGE_PADDING);
+        }
+      }
+    }
+
+    // ---------- BACKLIGHT ----------
+    if (millis() - lastActivityTime > INACTIVITY_TIMEOUT)
+    {
+
+      digitalWrite(TFT_BL, LOW);
+      lastActivityTime = millis();
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(15));
+  }
+}
+
+// =====================================================
+// STATUS BAR
+// =====================================================
+
+void drawStatusBar(bool isConnected, int batteryPercent)
+{
+  const char *btIcon = isConnected ? "/icons/con.jpg" : "/icons/dis.jpg";
+
+  if (!xSemaphoreTake(tftMutex, portMAX_DELAY))
+    return;
+
+  tft.fillRect(0, 0, tft.width(), STATUSBAR_HEIGHT, TFT_WHITE);
+
+  xSemaphoreGive(tftMutex);
+
+  displayJPEG(btIcon, 15, 5);
+
+  if (!xSemaphoreTake(tftMutex, portMAX_DELAY))
+    return;
+  if (batteryPercent == -1)
+  {
+    xSemaphoreGive(tftMutex);
+    return;
+  }
+
+  if (batteryPercent < 0)
+    batteryPercent = 0;
+  if (batteryPercent > 100)
+    batteryPercent = 100;
+
+  const int battW = 40;
+  const int battH = 22;
+  const int battX = tft.width() - battW - 15;
+  const int battY = 8;
+
+  tft.drawRoundRect(battX, battY, battW, battH, 4, TFT_BLACK);
+
+  tft.fillRect(battX - 4, battY + battH / 4, 4, battH / 2, TFT_BLACK);
+
+  int fillW = (battW - 4) * batteryPercent / 100;
+
+  uint16_t fillColor = TFT_GREEN;
+  if (batteryPercent <= 20)
+    fillColor = TFT_RED;
+  else if (batteryPercent <= 50)
+    fillColor = TFT_ORANGE;
+
+  tft.fillRoundRect(battX + 2, battY + 2, fillW, battH - 4, 3, fillColor);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_BLACK);
+  tft.setTextSize(1);
+  tft.drawString(String(batteryPercent) + "%", battX + battW / 2,
+                 battY + battH / 2);
+
+  tft.setTextDatum(TL_DATUM);
+
+  xSemaphoreGive(tftMutex);
+}
+
+// =====================================================
+// INIT / PUBLIC API
+// =====================================================
+
+void displayInit()
+{
+  tftMutex = xSemaphoreCreateMutex();
+  keysMutex = xSemaphoreCreateMutex();
+  tft.init();
+  tft.setSwapBytes(true);
+  tft.setRotation(2);
+  LittleFS.begin();
+  preloadImagesToPSRAM();
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, HIGH);
+  delay(200);
+}
+
+void displayStartKeyMonitor()
+{
+  imageQueue = xQueueCreate(10, sizeof(ImageRequest));
+  statusBarQueue = xQueueCreate(5, sizeof(StatusBarRequest));
+
+  lastKeyTime = millis();
+  lastActivityTime = millis();
+
+  xTaskCreatePinnedToCore(keyDisplayTask, "KeyDisplayTask", 6144, nullptr, 2,
+                          nullptr, 0);
+}
+
+void displayUpdateStatus(bool isConnected, int batteryPercent)
+{
+  if (!statusBarQueue)
+    return;
+
+  StatusBarRequest r{isConnected, batteryPercent};
+
+  xQueueSend(statusBarQueue, &r, 0);
+}
+
+void displayKeyPressed(char key)
+{
+  int count;
+
+  xSemaphoreTake(keysMutex, portMAX_DELAY);
+  keysPressed++;
+  count = keysPressed;
+  xSemaphoreGive(keysMutex);
+
+  ImageRequest req;
+  req.keyChar = key;
+
+  req.imageIndex = (count == 1) ? 2 + (rand() % 6) : 1;
+
+  if (imageQueue)
+    xQueueSend(imageQueue, &req, 0);
+}
+
+void displayKeyReleased()
+{
+  int count;
+
+  xSemaphoreTake(keysMutex, portMAX_DELAY);
+  if (keysPressed > 0)
+    keysPressed--;
+  count = keysPressed;
+  xSemaphoreGive(keysMutex);
+
+  if (count == 1 && imageQueue)
+  {
+    ImageRequest req;
+    req.imageIndex = 2 + (rand() % 6);
+    req.keyChar = '\0';
+    xQueueSend(imageQueue, &req, 0);
+  }
+}
+
+void displayClearScreen()
+{
+  if (xSemaphoreTake(tftMutex, portMAX_DELAY))
+  {
     tft.fillScreen(TFT_WHITE);
-    tft.setCursor(10, 10);
-    tft.setTextColor(TFT_RED);
-    tft.setTextSize(2);
-    tft.println("File not found!");
-    return;
+    xSemaphoreGive(tftMutex);
   }
-
-  Serial.printf("[DISPLAY] Loading JPEG: %s\n", filename);
-
-  // Set TFT_eSPI as the output device for TJpgDec
-  TJpgDec.setCallback(tftJpegOutput);
-  
-  // Decode and display the JPEG from SPIFFS
-  TJpgDec.drawJpg(x, y, filename);
-  
-  Serial.printf("[DISPLAY] JPEG displayed successfully: %s\n", filename);
-}
-
-// Clear the display screen
-void displayClearScreen() {
-  tft.fillScreen(TFT_WHITE);
-  Serial.println("[DISPLAY] Screen cleared");
-}
-
-// List all files in SPIFFS (for debugging)
-void displayListSPIFFSFiles() {
-  Serial.println("[SPIFFS] Files in storage:");
-  File root = SPIFFS.open("/");
-  File file = root.openNextFile();
-  
-  while (file) {
-    Serial.printf("  %s - %d bytes\n", file.name(), file.size());
-    file = root.openNextFile();
-  }
-  
-  // Print SPIFFS usage info
-  size_t totalBytes = SPIFFS.totalBytes();
-  size_t usedBytes = SPIFFS.usedBytes();
-  Serial.printf("[SPIFFS] Usage: %d / %d bytes (%.1f%%)\n", 
-                usedBytes, totalBytes, (float)usedBytes / totalBytes * 100);
 }

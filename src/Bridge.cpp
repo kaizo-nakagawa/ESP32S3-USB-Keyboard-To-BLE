@@ -30,46 +30,6 @@ BleDevice Bridge::bleDevice("Keychron Q1 Wireless", "Espressif");
 static uint8_t prevKeyState[6] = {0, 0, 0, 0, 0, 0};
 static uint8_t prevModifier = 0;
 
-void Bridge::begin()
-{
-  Serial.println("[System] Initializing USB-to-BLE Bridge...");
-
-  // Initialize BLE
-  Serial.println("[System] Starting BLE device...");
-  bleDevice.begin();
-
-  // Init USB
-  Serial.println("[System] Starting USB host...");
-  USBManager::setKeyboardCallback(onKeyboardReport);
-  USBManager::setMouseCallback(onMouseReport);
-  USBManager::setGenericCallback(onGenericReport);
-  USBManager::begin();
-
-  // Configure ADC for battery monitoring
-  analogReadResolution(12);
-  analogSetAttenuation(ADC_11db);
-  delay(100);
-  Serial.println("[System] Bridge initialized - waiting for connections...");
-}
-
-void displayConnectionStatus()
-{
-  // Display connection status at bottom of screen
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextSize(1);
-  tft.setCursor(10, 300);
-
-  if (Bridge::isConnected())
-  {
-    std::string clientName = Bridge::getConnectedClientName();
-    tft.printf("Conn.: %s        ", clientName.c_str());
-  }
-  else
-  {
-    tft.printf("Disconnected - Waiting...         ");
-  }
-}
-
 float readBatteryVoltage()
 {
   int sum = 0;
@@ -94,6 +54,31 @@ int batteryLevelToPercentage(float voltage)
   return (int)((voltage - 3.0) / (4.2 - 3.0) * 100);
 }
 
+void Bridge::begin()
+{
+  Serial.println("[System] Initializing USB-to-BLE Bridge...");
+
+  // Initialize BLE
+  Serial.println("[System] Starting BLE device...");
+  bleDevice.begin();
+
+  // Initialize USB
+  Serial.println("[System] Starting USB host...");
+  USBManager::setKeyboardCallback(onKeyboardReport);
+  USBManager::setMouseCallback(onMouseReport);
+  USBManager::setGenericCallback(onGenericReport);
+  USBManager::begin();
+
+  // Configure ADC for battery monitoring
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);
+  delay(100);
+  Serial.println("[System] Bridge initialized - waiting for connections...");
+  float batteryVoltage = readBatteryVoltage();
+  int batteryPercent = batteryLevelToPercentage(batteryVoltage);
+  displayUpdateStatus(bleDevice.isConnected(), batteryPercent);
+}
+
 void Bridge::loop()
 {
   // Status reporting
@@ -102,9 +87,12 @@ void Bridge::loop()
   {
     lastStatusTime = millis();
     Serial.printf("[System] BLE Status: %s\n", bleDevice.isConnected() ? "CONNECTED" : "DISCONNECTED");
-    //displayConnectionStatus();
     float batteryVoltage = readBatteryVoltage();
     int batteryPercent = batteryLevelToPercentage(batteryVoltage);
+
+    // Update display status bar with BT connection and battery level
+    displayUpdateStatus(bleDevice.isConnected(), batteryPercent);
+
     Serial.printf("[System] Battery Voltage: %.3f V (%d%%)\n", batteryVoltage, batteryPercent);
     bleDevice.reportBatteryLevel(batteryPercent);
   }
@@ -125,57 +113,110 @@ void Bridge::onKeyboardReport(const uint8_t *data, size_t length)
                 kb_report->key[5]);
 
   // Detect key presses (keys in current state but not in previous)
-  for (int i = 0; i < 6; i++) {
-    if (kb_report->key[i] != 0 && prevKeyState[i] == 0 && kb_report->key[i] != prevKeyState[i]) {
+  for (int i = 0; i < 6; i++)
+  {
+    if (kb_report->key[i] != 0 && prevKeyState[i] == 0 && kb_report->key[i] != prevKeyState[i])
+    {
       char asciiKey = HID_TO_ASCII[kb_report->key[i]];
-      
+
       // Handle shift modifier for uppercase/symbols
-      if (kb_report->modifier.val & 0x02 || kb_report->modifier.val & 0x20) { // Left or Right Shift
-        if (asciiKey >= 'a' && asciiKey <= 'z') {
+      if (kb_report->modifier.val & 0x02 || kb_report->modifier.val & 0x20)
+      { // Left or Right Shift
+        if (asciiKey >= 'a' && asciiKey <= 'z')
+        {
           asciiKey = asciiKey - 'a' + 'A';
-        } else {
+        }
+        else
+        {
           // Handle shifted symbols
-          switch (kb_report->key[i]) {
-          case 0x1E: asciiKey = '!'; break;
-          case 0x1F: asciiKey = '@'; break;
-          case 0x20: asciiKey = '#'; break;
-          case 0x21: asciiKey = '$'; break;
-          case 0x22: asciiKey = '%'; break;
-          case 0x23: asciiKey = '^'; break;
-          case 0x24: asciiKey = '&'; break;
-          case 0x25: asciiKey = '*'; break;
-          case 0x26: asciiKey = '('; break;
-          case 0x27: asciiKey = ')'; break;
-          case 0x2D: asciiKey = '_'; break;
-          case 0x2E: asciiKey = '+'; break;
-          case 0x2F: asciiKey = '{'; break;
-          case 0x30: asciiKey = '}'; break;
-          case 0x31: asciiKey = '|'; break;
-          case 0x33: asciiKey = ':'; break;
-          case 0x34: asciiKey = '"'; break;
-          case 0x35: asciiKey = '~'; break;
-          case 0x36: asciiKey = '<'; break;
-          case 0x37: asciiKey = '>'; break;
-          case 0x38: asciiKey = '?'; break;
+          switch (kb_report->key[i])
+          {
+          case 0x1E:
+            asciiKey = '!';
+            break;
+          case 0x1F:
+            asciiKey = '@';
+            break;
+          case 0x20:
+            asciiKey = '#';
+            break;
+          case 0x21:
+            asciiKey = '$';
+            break;
+          case 0x22:
+            asciiKey = '%';
+            break;
+          case 0x23:
+            asciiKey = '^';
+            break;
+          case 0x24:
+            asciiKey = '&';
+            break;
+          case 0x25:
+            asciiKey = '*';
+            break;
+          case 0x26:
+            asciiKey = '(';
+            break;
+          case 0x27:
+            asciiKey = ')';
+            break;
+          case 0x2D:
+            asciiKey = '_';
+            break;
+          case 0x2E:
+            asciiKey = '+';
+            break;
+          case 0x2F:
+            asciiKey = '{';
+            break;
+          case 0x30:
+            asciiKey = '}';
+            break;
+          case 0x31:
+            asciiKey = '|';
+            break;
+          case 0x33:
+            asciiKey = ':';
+            break;
+          case 0x34:
+            asciiKey = '"';
+            break;
+          case 0x35:
+            asciiKey = '~';
+            break;
+          case 0x36:
+            asciiKey = '<';
+            break;
+          case 0x37:
+            asciiKey = '>';
+            break;
+          case 0x38:
+            asciiKey = '?';
+            break;
           }
         }
       }
-      
-      if (asciiKey != 0) {
+
+      if (asciiKey != 0)
+      {
         displayKeyPressed(asciiKey);
       }
     }
   }
-  
+
   // Detect key releases (keys in previous state but not in current)
-  for (int i = 0; i < 6; i++) {
-    if (prevKeyState[i] != 0 && kb_report->key[i] == 0) {
+  for (int i = 0; i < 6; i++)
+  {
+    if (prevKeyState[i] != 0 && kb_report->key[i] == 0)
+    {
       displayKeyReleased();
     }
   }
-  
+
   // Update previous state
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < 6; i++)
+  {
     prevKeyState[i] = kb_report->key[i];
   }
   prevModifier = kb_report->modifier.val;

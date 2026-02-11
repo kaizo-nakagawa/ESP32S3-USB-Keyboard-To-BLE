@@ -11,8 +11,8 @@ void displayInit();
 void displayStartKeyMonitor();
 void displayKeyPressed(char key);
 void displayKeyReleased();
-void displayJPEG(const char* filename, int x, int y);
 void displayClearScreen();
-void displayListSPIFFSFiles();
+void displayJPEG(const char* filename, int x, int y);
+void displayUpdateStatus(bool isConnected, int batteryPercent);  // New: thread-safe status update
  
 #endif // DISPLAY_H

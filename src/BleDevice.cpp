@@ -7,9 +7,9 @@
 #include <NimBLEServer.h>
 #include <NimBLEDescriptor.h>
 #include <NimBLEHIDDevice.h>
-#include <Adafruit_NeoPixel.h>
 
 #include "BleDevice.h"
+#include "Display.h"
 
 #if defined(CONFIG_ARDUHAL_ESP_LOG)
 #include "esp32-hal-log.h"
@@ -153,24 +153,37 @@ static const uint8_t _hidReportDescriptor[] = {
     END_COLLECTION(0)         // END_COLLECTION
 };
 
-Adafruit_NeoPixel pixels(NUMPIXELS, 48, NEO_GRB + NEO_KHZ800);
-#define DELAYVAL 500 // delay for half a second
-
 BleDevice::BleDevice(std::string deviceName, std::string deviceManufacturer)
     : hid(0), deviceName(deviceName), deviceManufacturer(deviceManufacturer) {}
 
 void BleDevice::begin(void)
 {
+  // Init BLE
   NimBLEDevice::init(deviceName);
+
+  // ===== SECURITY FIX =====
+  // Bonding ON, MITM OFF, Secure Connections OFF
+  NimBLEDevice::setSecurityAuth(true, false, false);
+
+  // Device has no keyboard/display for pairing
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+
+  // Key distribution for stable reconnect
+  NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC);
+  NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC);
+
+  // ========================
+
   NimBLEServer *pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(this);
 
   hid = new NimBLEHIDDevice(pServer);
-  inputKeyboard = hid->getInputReport(KEYBOARD_ID); // <-- input REPORTID from report map
+
+  inputKeyboard = hid->getInputReport(KEYBOARD_ID);
   outputKeyboard = hid->getOutputReport(KEYBOARD_ID);
   inputMediaKeys = hid->getInputReport(MEDIA_KEYS_ID);
-  inputMouse = hid->getInputReport(MOUSE_ID); // <-- input REPORTID from report map
-  inputJoystick = hid->getInputReport(0x04);  // <-- joystick REPORTID
+  inputMouse = hid->getInputReport(MOUSE_ID);
+  inputJoystick = hid->getInputReport(0x04);
 
   outputKeyboard->setCallbacks(this);
 
@@ -179,15 +192,14 @@ void BleDevice::begin(void)
   hid->setPnp(0x02, 0x05ac, 0x820a, 0x0210);
   hid->setHidInfo(0x00, 0x01);
 
-  // Security is configured via device level in v2.x
-  NimBLEDevice::setSecurityAuth(true, true, true);
+  hid->setReportMap((uint8_t *)_hidReportDescriptor,
+                    sizeof(_hidReportDescriptor));
 
-  hid->setReportMap((uint8_t *)_hidReportDescriptor, sizeof(_hidReportDescriptor));
   hid->startServices();
 
   advertising = pServer->getAdvertising();
 
-  // Limit device name to 20 characters for standard BLE compatibility
+  // Limit advertise name length
   std::string advertiseName = deviceName;
   if (advertiseName.length() > 20)
   {
@@ -197,14 +209,11 @@ void BleDevice::begin(void)
   advertising->setName(advertiseName);
   advertising->setAppearance(HID_KEYBOARD);
   advertising->addServiceUUID(hid->getHidService()->getUUID());
-  // Enable scan response to allow full device name in separate packet
   advertising->enableScanResponse(true);
+
   advertising->start();
 
-  // Initialize NeoPixel after BLE to avoid RMT driver conflicts
-  // initNeoPixel();
-
-  ESP_LOGD(LOG_TAG, "Advertising started!");
+  ESP_LOGI(LOG_TAG, "BLE HID Advertising started");
 }
 
 bool BleDevice::isConnected(void)
@@ -258,19 +267,28 @@ void BleDevice::onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo)
   sprintf(addrStr, "%s", clientAddr.toString().c_str());
 
   connectedClientName = std::string(addrStr);
+  displayUpdateStatus(true, -1); // Update display: connected, battery unknown
 
   ESP_LOGD(LOG_TAG, "Client connected: handle=%u, addr=%s",
            connInfo.getConnHandle(), connectedClientName.c_str());
-  // updateNeoPixelStatus(); // Update LED to green
 }
 
 void BleDevice::onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason)
 {
   this->connected = false;
   connectedClientName = "Disconnected";
-
+  NimBLEDevice::startAdvertising();
+  displayUpdateStatus(false, -1); // Update display: disconnected, battery unknown
   ESP_LOGD(LOG_TAG, "Client disconnected: handle=%u, reason=%d", connInfo.getConnHandle(), reason);
-  // updateNeoPixelStatus(); // Update LED to blue
+}
+
+void BleDevice::onAuthenticationComplete(ble_gap_conn_desc *desc)
+{
+  if (!desc->sec_state.encrypted)
+  {
+    ESP_LOGE(LOG_TAG, "Encrypt failed — disconnecting");
+    NimBLEDevice::getServer()->disconnect(desc->conn_handle);
+  }
 }
 
 void BleDevice::onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo &connInfo)
@@ -281,10 +299,7 @@ void BleDevice::onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo &c
     if (value.length() > 0)
     {
       ledStatus = value[0];
-      ESP_LOGI(LOG_TAG, "LED Status: NUM:%d CAPS:%d SCROLL:%d",
-               isNumLockOn() ? 1 : 0,
-               isCapsLockOn() ? 1 : 0,
-               isScrollLockOn() ? 1 : 0);
+      displayUpdateStatus(true, -1); // Update display: connected, battery unknown
     }
   }
 }
@@ -433,38 +448,4 @@ void BleDevice::reportBatteryLevel(uint8_t level)
     hid->setBatteryLevel(level);
     ESP_LOGD(LOG_TAG, "Battery level reported: %d%%", level);
   }
-}
-
-void BleDevice::initNeoPixel()
-{
-  pixels.begin();
-  pixels.clear();
-  // Initialize to waiting state (blue)
-  for (int i = 0; i < NUMPIXELS; i++)
-  {
-    pixels.setPixelColor(i, pixels.Color(0, 0, 100)); // Blue = waiting for connection
-  }
-  pixels.show();
-  ESP_LOGD(LOG_TAG, "NeoPixel initialized successfully");
-}
-
-void BleDevice::updateNeoPixelStatus()
-{
-  if (this->connected)
-  {
-    // Green = connected
-    for (int i = 0; i < NUMPIXELS; i++)
-    {
-      pixels.setPixelColor(i, pixels.Color(0, 100, 0));
-    }
-  }
-  else
-  {
-    // Blue = disconnected/waiting
-    for (int i = 0; i < NUMPIXELS; i++)
-    {
-      pixels.setPixelColor(i, pixels.Color(0, 0, 100));
-    }
-  }
-  pixels.show();
 }
