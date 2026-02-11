@@ -6,12 +6,14 @@
 #include "esp_heap_caps.h"
 #include <Arduino.h>
 
-void printPsramInfo() {
+void printPsramInfo()
+{
   Serial.printf("PSRAM total: %u bytes\n", ESP.getPsramSize());
   Serial.printf("PSRAM free : %u bytes\n", ESP.getFreePsram());
 }
 
-void setup() {
+void setup()
+{
   Serial.begin(115200);
   delay(2000);
 
@@ -22,13 +24,17 @@ void setup() {
   Serial.println("╚════════════════════════════════════════════════╝");
   Serial.println();
 
-  try {
+  try
+  {
     // Initialize SPI explicitly for display
     Serial.println("Initializing display...");
     delay(3500);
-    if (!psramInit()) {
+    if (!psramInit())
+    {
       Serial.println("PSRAM init FAILED!");
-    } else {
+    }
+    else
+    {
       Serial.println("PSRAM init OK");
     }
 
@@ -40,14 +46,16 @@ void setup() {
     displayJPEG("/logo/logo_key.jpg", 0, 0);
     delay(2000);
     displayClearScreen();
-    displayUpdateStatus(false, 0);
+    displayUpdateStatus(false, 0, 0xff);
 
     // Start GIF playback on core 2
     // gifPlayerInit("/evernight2.gif");
 
     // Start key monitor on core 0
     displayStartKeyMonitor();
-  } catch (...) {
+  }
+  catch (...)
+  {
     Serial.println("ERROR: Display initialization failed!");
   }
 
@@ -66,7 +74,8 @@ void setup() {
   Serial.println();
 }
 
-void loop() {
+void loop()
+{
   Bridge::loop();
   // displayJoystickValues();
   // joystickControlMouse();

@@ -76,7 +76,7 @@ void Bridge::begin()
   Serial.println("[System] Bridge initialized - waiting for connections...");
   float batteryVoltage = readBatteryVoltage();
   int batteryPercent = batteryLevelToPercentage(batteryVoltage);
-  displayUpdateStatus(bleDevice.isConnected(), batteryPercent);
+  displayUpdateStatus(bleDevice.isConnected(), batteryPercent, 0xff);
 }
 
 void Bridge::loop()
@@ -91,7 +91,7 @@ void Bridge::loop()
     int batteryPercent = batteryLevelToPercentage(batteryVoltage);
 
     // Update display status bar with BT connection and battery level
-    displayUpdateStatus(bleDevice.isConnected(), batteryPercent);
+    displayUpdateStatus(bleDevice.isConnected(), batteryPercent, 0xff);
 
     Serial.printf("[System] Battery Voltage: %.3f V (%d%%)\n", batteryVoltage, batteryPercent);
     bleDevice.reportBatteryLevel(batteryPercent);
@@ -201,6 +201,10 @@ void Bridge::onKeyboardReport(const uint8_t *data, size_t length)
       if (asciiKey != 0)
       {
         displayKeyPressed(asciiKey);
+      }
+      else
+      {
+        displayKeyPressed(' '); // Unknown key placeholder
       }
     }
   }

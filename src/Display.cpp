@@ -47,6 +47,9 @@ static size_t btIconConnectedSize = 0;
 static uint8_t *btIconDisconnected = nullptr;
 static size_t btIconDisconnectedSize = 0;
 
+static uint8_t *capsIcon = nullptr;
+static size_t capsIconSize = 0;
+
 static const int IMAGE_PADDING = 120;
 
 // =====================================================
@@ -73,6 +76,7 @@ struct StatusBarRequest
 {
   bool isConnected;
   int batteryPercent;
+  uint8_t ledStatus;
 };
 
 // =====================================================
@@ -81,7 +85,7 @@ static const int STATUSBAR_HEIGHT = 40;
 
 static bool lastConnectionState = false;
 static int lastBatteryPercent = -1;
-
+static uint8_t lastLedStatus = 0;
 // =====================================================
 // PSRAM LOADER
 // =====================================================
@@ -133,6 +137,8 @@ static void preloadImagesToPSRAM()
   loadFileToPSRAM("/icons/dis.jpg", &btIconDisconnected,
                   &btIconDisconnectedSize);
 
+  loadFileToPSRAM("/icons/caps.jpg", &capsIcon, &capsIconSize);
+
   Serial.println("[PSRAM] Image preload done");
 }
 
@@ -140,7 +146,7 @@ static void preloadImagesToPSRAM()
 // JPEG DRAW
 // =====================================================
 
-void drawStatusBar(bool isConnected, int batteryPercent);
+void drawStatusBar(bool isConnected, int batteryPercent, uint8_t ledStatus);
 
 static void drawJpegFromPSRAM(int x, int y, uint8_t *buf, size_t len)
 {
@@ -180,6 +186,13 @@ void displayJPEG(const char *filename, int x, int y)
     return;
   }
 
+    if (!strcmp(filename, "/icons/caps.jpg") && capsIcon)
+  {
+
+    drawJpegFromPSRAM(x, y, capsIcon, capsIconSize);
+    return;
+  }
+
   // fallback SPIFFS
   if (xSemaphoreTake(tftMutex, portMAX_DELAY))
   {
@@ -207,12 +220,14 @@ static void keyDisplayTask(void *parameter)
         xQueueReceive(statusBarQueue, &statusReq, pdMS_TO_TICKS(50)))
     {
       if (statusReq.isConnected != lastConnectionState ||
-          statusReq.batteryPercent != lastBatteryPercent)
+          statusReq.batteryPercent != lastBatteryPercent ||
+          statusReq.ledStatus != lastLedStatus)
       {
         lastConnectionState = statusReq.isConnected;
         lastBatteryPercent = statusReq.batteryPercent;
+        lastLedStatus = statusReq.ledStatus;
 
-        drawStatusBar(statusReq.isConnected, statusReq.batteryPercent);
+        drawStatusBar(statusReq.isConnected, statusReq.batteryPercent, statusReq.ledStatus);
       }
       continue;
     }
@@ -282,59 +297,65 @@ static void keyDisplayTask(void *parameter)
 // STATUS BAR
 // =====================================================
 
-void drawStatusBar(bool isConnected, int batteryPercent)
+void drawStatusBar(bool isConnected, int batteryPercent, uint8_t ledStatus)
 {
   const char *btIcon = isConnected ? "/icons/con.jpg" : "/icons/dis.jpg";
 
   if (!xSemaphoreTake(tftMutex, portMAX_DELAY))
     return;
 
-  tft.fillRect(0, 0, tft.width(), STATUSBAR_HEIGHT, TFT_WHITE);
-
+  tft.fillRect(0, 0, 50, STATUSBAR_HEIGHT, TFT_WHITE);
   xSemaphoreGive(tftMutex);
-
   displayJPEG(btIcon, 15, 5);
-
   if (!xSemaphoreTake(tftMutex, portMAX_DELAY))
     return;
-  if (batteryPercent == -1)
+
+  if (ledStatus != 0xff)
   {
-    xSemaphoreGive(tftMutex);
+    tft.fillRect(50 + 10, 0, 30, STATUSBAR_HEIGHT, TFT_WHITE);
+    if (ledStatus & 0x02)
+    {
+      xSemaphoreGive(tftMutex);
+      displayJPEG("/icons/caps.jpg", 50 + 15, 5);
+      if (!xSemaphoreTake(tftMutex, portMAX_DELAY))
     return;
+    }
   }
+  if (batteryPercent != -1)
+  {
+    tft.fillRect(tft.width() - 50, 0, 50, STATUSBAR_HEIGHT, TFT_WHITE);
+    if (batteryPercent < 0)
+      batteryPercent = 0;
+    if (batteryPercent > 100)
+      batteryPercent = 100;
 
-  if (batteryPercent < 0)
-    batteryPercent = 0;
-  if (batteryPercent > 100)
-    batteryPercent = 100;
+    const int battW = 40;
+    const int battH = 22;
+    const int battX = tft.width() - battW - 15;
+    const int battY = 8;
 
-  const int battW = 40;
-  const int battH = 22;
-  const int battX = tft.width() - battW - 15;
-  const int battY = 8;
+    tft.drawRoundRect(battX, battY, battW, battH, 4, TFT_BLACK);
 
-  tft.drawRoundRect(battX, battY, battW, battH, 4, TFT_BLACK);
+    tft.fillRect(battX - 4, battY + battH / 4, 4, battH / 2, TFT_BLACK);
 
-  tft.fillRect(battX - 4, battY + battH / 4, 4, battH / 2, TFT_BLACK);
+    int fillW = (battW - 4) * batteryPercent / 100;
 
-  int fillW = (battW - 4) * batteryPercent / 100;
+    uint16_t fillColor = TFT_GREEN;
+    if (batteryPercent <= 20)
+      fillColor = TFT_RED;
+    else if (batteryPercent <= 50)
+      fillColor = TFT_ORANGE;
 
-  uint16_t fillColor = TFT_GREEN;
-  if (batteryPercent <= 20)
-    fillColor = TFT_RED;
-  else if (batteryPercent <= 50)
-    fillColor = TFT_ORANGE;
+    tft.fillRoundRect(battX + 2, battY + 2, fillW, battH - 4, 3, fillColor);
 
-  tft.fillRoundRect(battX + 2, battY + 2, fillW, battH - 4, 3, fillColor);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(TFT_BLACK);
+    tft.setTextSize(1);
+    tft.drawString(String(batteryPercent) + "%", battX + battW / 2,
+                   battY + battH / 2);
 
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(TFT_BLACK);
-  tft.setTextSize(1);
-  tft.drawString(String(batteryPercent) + "%", battX + battW / 2,
-                 battY + battH / 2);
-
-  tft.setTextDatum(TL_DATUM);
-
+    tft.setTextDatum(TL_DATUM);
+  }
   xSemaphoreGive(tftMutex);
 }
 
@@ -368,12 +389,12 @@ void displayStartKeyMonitor()
                           nullptr, 0);
 }
 
-void displayUpdateStatus(bool isConnected, int batteryPercent)
+void displayUpdateStatus(bool isConnected, int batteryPercent, uint8_t ledStatus = 0)
 {
   if (!statusBarQueue)
     return;
 
-  StatusBarRequest r{isConnected, batteryPercent};
+  StatusBarRequest r{isConnected, batteryPercent, ledStatus};
 
   xQueueSend(statusBarQueue, &r, 0);
 }

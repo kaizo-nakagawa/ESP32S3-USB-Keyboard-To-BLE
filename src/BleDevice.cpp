@@ -25,9 +25,6 @@ static const char *LOG_TAG = "BLEDevice";
 #define MOUSE_ID 0x03
 #define JOYSTICK_ID 0x04
 
-// RGB Led for connection status
-#define NUMPIXELS 1
-
 static const uint8_t _hidReportDescriptor[] = {
     USAGE_PAGE(1), 0x01, // USAGE_PAGE (Generic Desktop Ctrls)
     USAGE(1), 0x06,      // USAGE (Keyboard)
@@ -267,7 +264,7 @@ void BleDevice::onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo)
   sprintf(addrStr, "%s", clientAddr.toString().c_str());
 
   connectedClientName = std::string(addrStr);
-  displayUpdateStatus(true, -1); // Update display: connected, battery unknown
+  displayUpdateStatus(true, -1, 0xff); // Update display: connected, battery unknown
 
   ESP_LOGD(LOG_TAG, "Client connected: handle=%u, addr=%s",
            connInfo.getConnHandle(), connectedClientName.c_str());
@@ -278,7 +275,7 @@ void BleDevice::onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, in
   this->connected = false;
   connectedClientName = "Disconnected";
   NimBLEDevice::startAdvertising();
-  displayUpdateStatus(false, -1); // Update display: disconnected, battery unknown
+  displayUpdateStatus(false, -1, 0xff); // Update display: disconnected, battery unknown
   ESP_LOGD(LOG_TAG, "Client disconnected: handle=%u, reason=%d", connInfo.getConnHandle(), reason);
 }
 
@@ -299,7 +296,7 @@ void BleDevice::onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo &c
     if (value.length() > 0)
     {
       ledStatus = value[0];
-      displayUpdateStatus(true, -1); // Update display: connected, battery unknown
+      displayUpdateStatus(true, -1, ledStatus); // Update display: connected, battery unknown
     }
   }
 }

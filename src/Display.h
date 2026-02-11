@@ -12,7 +12,7 @@ void displayStartKeyMonitor();
 void displayKeyPressed(char key);
 void displayKeyReleased();
 void displayClearScreen();
-void displayJPEG(const char* filename, int x, int y);
-void displayUpdateStatus(bool isConnected, int batteryPercent);  // New: thread-safe status update
- 
+void displayJPEG(const char *filename, int x, int y);
+void displayUpdateStatus(bool isConnected, int batteryPercent, uint8_t ledStatus); // New: thread-safe status update
+
 #endif // DISPLAY_H
