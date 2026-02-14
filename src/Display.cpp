@@ -9,6 +9,15 @@
 #include <freertos/task.h>
 
 #define TFT_BL 9
+#define TFT_WIDTH  172 // ST7789 172 x 320
+#define TFT_HEIGHT 320 // ST7789 240 x 320
+#define TFT_MISO 13  // GPIO 13
+#define TFT_MOSI 11  // GPIO 11 (SDA/DIN)
+#define TFT_SCLK 12  // GPIO 12 (SCK/SCL)
+#define TFT_CS   10  // Chip select control pin (GPIO 10)
+#define TFT_DC    6  // Data Command control pin (GPIO 6)
+#define TFT_RST   7  // Reset pin (GPIO 7)
+#define SPI_FREQUENCY  27000000
 
 TFT_eSPI tft;
 TFT_eFEX fex(&tft);

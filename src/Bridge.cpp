@@ -23,12 +23,12 @@ static const char HID_TO_ASCII[256] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
-// Static member initialization
-BleDevice Bridge::bleDevice("Keychron Q1 Wireless", "Espressif");
-
 // Track previous keyboard state to detect releases
 static uint8_t prevKeyState[6] = {0, 0, 0, 0, 0, 0};
 static uint8_t prevModifier = 0;
+
+// Define static member variable with default constructor arguments
+BleDevice Bridge::bleDevice("Keychron Q1 Wireless", "Espressif");
 
 float readBatteryVoltage()
 {

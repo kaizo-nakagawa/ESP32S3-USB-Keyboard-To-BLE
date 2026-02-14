@@ -150,28 +150,39 @@ static const uint8_t _hidReportDescriptor[] = {
     END_COLLECTION(0)         // END_COLLECTION
 };
 
+/**
+ * @brief Constructor for BleDevice
+ * @param deviceName Bluetooth advertised name
+ * @param deviceManufacturer Manufacturer name
+ */
 BleDevice::BleDevice(std::string deviceName, std::string deviceManufacturer)
-    : hid(0), deviceName(deviceName), deviceManufacturer(deviceManufacturer) {}
+    : hid(nullptr), inputMouse(nullptr), inputJoystick(nullptr),
+      inputKeyboard(nullptr), outputKeyboard(nullptr), inputMediaKeys(nullptr),
+      advertising(nullptr), deviceName(deviceName),
+      deviceManufacturer(deviceManufacturer), connectedClientName(""),
+      connected(false), ledStatus(0), _accumulatedX(0), _accumulatedY(0),
+      _accumulatedWheel(0), _lastMouseSendTime(0) {}
 
 void BleDevice::begin(void)
 {
-  // Init BLE
+
   NimBLEDevice::init(deviceName);
+#ifdef ESP_PLATFORM
+  NimBLEDevice::setPower(ESP_PWR_LVL_P9); /** +9db */
+#else
+  NimBLEDevice::setPower(9); /** +9db */
+#endif
 
-  // ===== SECURITY FIX =====
-  // Bonding ON, MITM OFF, Secure Connections OFF
-  NimBLEDevice::setSecurityAuth(true, false, false);
-
-  // Device has no keyboard/display for pairing
-  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
-
-  // Key distribution for stable reconnect
-  NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC);
-  NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC);
-
-  // ========================
-
+  NimBLEDevice::setSecurityAuth(true, true, true);
+  NimBLEDevice::setSecurityPasskey(123456);
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
   NimBLEServer *pServer = NimBLEDevice::createServer();
+  NimBLEService *pService = pServer->createService("ABCD");
+  NimBLECharacteristic *pSecureCharacteristic = pService->createCharacteristic("1235", NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC | NIMBLE_PROPERTY::READ_AUTHEN);
+
+  pService->start();
+  pSecureCharacteristic->setValue("Hello Secure BLE");
+
   pServer->setCallbacks(this);
 
   hid = new NimBLEHIDDevice(pServer);
@@ -194,7 +205,7 @@ void BleDevice::begin(void)
 
   hid->startServices();
 
-  advertising = pServer->getAdvertising();
+  NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
 
   // Limit advertise name length
   std::string advertiseName = deviceName;
@@ -203,12 +214,12 @@ void BleDevice::begin(void)
     advertiseName = advertiseName.substr(0, 20);
   }
 
-  advertising->setName(advertiseName);
-  advertising->setAppearance(HID_KEYBOARD);
-  advertising->addServiceUUID(hid->getHidService()->getUUID());
-  advertising->enableScanResponse(true);
-
-  advertising->start();
+  pAdvertising->setName(advertiseName);
+  pAdvertising->setAppearance(HID_KEYBOARD);
+  pAdvertising->addServiceUUID(hid->getHidService()->getUUID());
+  pAdvertising->enableScanResponse(true);
+  pAdvertising->addServiceUUID("ABCD");
+  pAdvertising->start();
 
   ESP_LOGI(LOG_TAG, "BLE HID Advertising started");
 }
