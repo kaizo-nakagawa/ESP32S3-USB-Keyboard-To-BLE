@@ -98,10 +98,10 @@ void Bridge::loop()
   }
 }
 
-void Bridge::onKeyboardReport(const uint8_t *data, size_t length)
+hid_keyboard_input_report_boot_t *showKeyboardReport(const uint8_t *data, size_t length)
 {
   if (length < sizeof(hid_keyboard_input_report_boot_t))
-    return;
+    return nullptr;
 
   hid_keyboard_input_report_boot_t *kb_report =
       (hid_keyboard_input_report_boot_t *)data;
@@ -224,7 +224,15 @@ void Bridge::onKeyboardReport(const uint8_t *data, size_t length)
     prevKeyState[i] = kb_report->key[i];
   }
   prevModifier = kb_report->modifier.val;
+  return kb_report;
+}
 
+void Bridge::onKeyboardReport(const uint8_t *data, size_t length)
+{
+
+  hid_keyboard_input_report_boot_t *kb_report = showKeyboardReport(data, length);
+  if (!kb_report)
+    return;
   // Forward to BLE
   if (Bridge::bleDevice.isConnected())
   {
@@ -305,8 +313,8 @@ void Bridge::onGenericReport(const uint8_t *data, size_t length)
 
     Serial.printf("[CONSUMER] Code: 0x%02X (%s)\n", consumerCode, consumerName);
 
-    // Forward consumer control to BLE when connected
-    if (consumerCode != 0x00 && Bridge::bleDevice.isConnected())
+    // Forward consumer control to BLE when connected (including release)
+    if (Bridge::bleDevice.isConnected())
     {
       Bridge::bleDevice.sendMedia(consumerCode);
     }
@@ -326,6 +334,26 @@ void Bridge::sendJoystickReport(uint8_t buttons, uint8_t x, uint8_t y, uint8_t z
   if (bleDevice.isConnected())
   {
     bleDevice.sendJoystick(buttons, x, y, z);
+  }
+}
+
+void Bridge::sendKey(uint8_t keyCode, uint8_t modifier)
+{
+  if (bleDevice.isConnected())
+  {
+    // Combine with current keyboard modifier state (e.g., if Shift is held)
+    uint8_t combinedModifier = modifier | prevModifier;
+    
+    // Send key press with combined modifiers
+    uint8_t keys[6] = {keyCode, 0, 0, 0, 0, 0};
+    bleDevice.sendKeyboard(keys, combinedModifier);
+
+    // Small delay then release
+    delay(50);
+
+    // Send key release but keep the original modifiers held
+    uint8_t release[6] = {0, 0, 0, 0, 0, 0};
+    bleDevice.sendKeyboard(release, prevModifier);
   }
 }
 

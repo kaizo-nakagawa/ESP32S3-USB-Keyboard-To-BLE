@@ -62,8 +62,8 @@ void setup()
   // delay(1000);
 
   // Initialize joystick
-  // Serial.println("Initializing joystick...");
-  // joystickInit();
+  Serial.println("Initializing joystick...");
+  joystickInit();
 
   Bridge::begin();
 
@@ -77,7 +77,7 @@ void setup()
 void loop()
 {
   Bridge::loop();
-  // displayJoystickValues();
+  displayJoystickValues();
   // joystickControlMouse();
   // displayConnectionStatus();
 }

@@ -381,9 +381,11 @@ void BleDevice::sendMedia(uint8_t consumerCode)
     return;
   }
 
-  // Ignore release codes
+  // Handle release code - send all zeros
   if (consumerCode == 0x00)
   {
+    uint8_t releaseData[2] = {0, 0};
+    sendMediaReport(releaseData, 2);
     return;
   }
 
@@ -421,7 +423,6 @@ void BleDevice::sendMedia(uint8_t consumerCode)
   uint8_t reportData[2];
   reportData[0] = (uint8_t)(mediaKeyCode & 0xFF);        // Low byte
   reportData[1] = (uint8_t)((mediaKeyCode >> 8) & 0xFF); // High byte
-
   sendMediaReport(reportData, 2);
 }
 

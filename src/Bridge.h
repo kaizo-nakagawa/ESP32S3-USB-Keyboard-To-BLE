@@ -40,6 +40,9 @@ public:
   /// Send joystick report via BLE
   static void sendJoystickReport(uint8_t buttons, uint8_t x, uint8_t y, uint8_t z = 127);
 
+  /// Send a single key press and release via BLE
+  static void sendKey(uint8_t keyCode, uint8_t modifier = 0);
+
   /// Check if BLE device is connected
   static bool isConnected();
 
