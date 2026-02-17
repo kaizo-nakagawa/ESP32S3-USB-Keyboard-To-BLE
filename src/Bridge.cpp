@@ -1,6 +1,17 @@
 #include "Bridge.h"
 #include "Display.h"
 #include <hid_usage_keyboard.h>
+#include <WiFi.h>
+#include <esp_now.h>
+
+// ESP-NOW target device MAC address: dc:4f:22:0a:60:22
+static uint8_t espNowTargetAddress[] = {0xDC, 0x4F, 0x22, 0x0A, 0x60, 0x22};
+
+// Keyboard report structure for ESP-NOW transmission
+struct EspNowKeyboardReport {
+  uint8_t modifier;
+  uint8_t keys[6];
+};
 
 // Battery voltage divider
 #define BAT_ADC 1
@@ -56,14 +67,24 @@ int batteryLevelToPercentage(float voltage)
 
 void Bridge::begin()
 {
-  Serial.println("[System] Initializing USB-to-BLE Bridge...");
+  // Initialize WiFi for ESP-NOW
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+
+  // Initialize ESP-NOW
+  if (esp_now_init() != ESP_OK) return;
+
+  // Register ESP-NOW peer
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, espNowTargetAddress, 6);
+  peerInfo.channel = 0;
+  peerInfo.encrypt = false;
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) return;
 
   // Initialize BLE
-  Serial.println("[System] Starting BLE device...");
   bleDevice.begin();
 
   // Initialize USB
-  Serial.println("[System] Starting USB host...");
   USBManager::setKeyboardCallback(onKeyboardReport);
   USBManager::setMouseCallback(onMouseReport);
   USBManager::setGenericCallback(onGenericReport);
@@ -73,7 +94,6 @@ void Bridge::begin()
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
   delay(100);
-  Serial.println("[System] Bridge initialized - waiting for connections...");
   float batteryVoltage = readBatteryVoltage();
   int batteryPercent = batteryLevelToPercentage(batteryVoltage);
   displayUpdateStatus(bleDevice.isConnected(), batteryPercent, 0xff);
@@ -81,19 +101,13 @@ void Bridge::begin()
 
 void Bridge::loop()
 {
-  // Status reporting
   static unsigned long lastStatusTime = 0;
   if (millis() - lastStatusTime > 10000)
   {
     lastStatusTime = millis();
-    Serial.printf("[System] BLE Status: %s\n", bleDevice.isConnected() ? "CONNECTED" : "DISCONNECTED");
     float batteryVoltage = readBatteryVoltage();
     int batteryPercent = batteryLevelToPercentage(batteryVoltage);
-
-    // Update display status bar with BT connection and battery level
     displayUpdateStatus(bleDevice.isConnected(), batteryPercent, 0xff);
-
-    Serial.printf("[System] Battery Voltage: %.3f V (%d%%)\n", batteryVoltage, batteryPercent);
     bleDevice.reportBatteryLevel(batteryPercent);
   }
 }
@@ -105,12 +119,6 @@ hid_keyboard_input_report_boot_t *showKeyboardReport(const uint8_t *data, size_t
 
   hid_keyboard_input_report_boot_t *kb_report =
       (hid_keyboard_input_report_boot_t *)data;
-
-  // Print intercepted keyboard data
-  Serial.printf("[KEYBOARD] Modifier: 0x%02X | Keys: [%02X %02X %02X %02X %02X %02X]\n",
-                kb_report->modifier.val, kb_report->key[0], kb_report->key[1],
-                kb_report->key[2], kb_report->key[3], kb_report->key[4],
-                kb_report->key[5]);
 
   // Detect key presses (keys in current state but not in previous)
   for (int i = 0; i < 6; i++)
@@ -233,7 +241,14 @@ void Bridge::onKeyboardReport(const uint8_t *data, size_t length)
   hid_keyboard_input_report_boot_t *kb_report = showKeyboardReport(data, length);
   if (!kb_report)
     return;
-  // Forward to BLE
+
+  // Forward to ESP-NOW
+  EspNowKeyboardReport espNowReport;
+  espNowReport.modifier = kb_report->modifier.val;
+  memcpy(espNowReport.keys, kb_report->key, 6);
+  esp_now_send(espNowTargetAddress, (uint8_t *)&espNowReport, sizeof(espNowReport));
+
+  // Also forward to BLE if connected
   if (Bridge::bleDevice.isConnected())
   {
     Bridge::bleDevice.sendKeyboard(kb_report->key, kb_report->modifier.val);
@@ -257,10 +272,6 @@ void Bridge::onMouseReport(const uint8_t *data, size_t length)
     wheel = (int8_t)data[3];
   }
 
-  // Print intercepted mouse data
-  Serial.printf("[MOUSE] Buttons: 0x%02X | X: %d | Y: %d | Wheel: %d\n",
-                buttons, x, y, wheel);
-
   // Forward to BLE
   if (Bridge::bleDevice.isConnected())
   {
@@ -279,41 +290,14 @@ void Bridge::onGenericReport(const uint8_t *data, size_t length)
   uint8_t reportId = data[0];
   uint8_t consumerCode = data[1];
 
-  // Print raw data
-  Serial.printf("[GENERIC] Length: %d, ReportID: 0x%02X, Data: ", length, reportId);
-  for (size_t i = 1; i < length && i < 16; i++)
-  {
-    Serial.printf("%02X ", data[i]);
-  }
-  Serial.println();
-
-  // Parse Consumer Control codes (Report ID 0x04)
+  // Handle Consumer Control codes (Report ID 0x04)
   if (reportId == 0x04)
   {
-    const char *consumerName = "";
+    // Forward to ESP-NOW (send as raw 2-byte: type + code)
+    uint8_t mediaReport[2] = {0x02, consumerCode};  // 0x02 = media type
+    esp_now_send(espNowTargetAddress, mediaReport, 2);
 
-    switch (consumerCode)
-    {
-    case 0xE2:
-      consumerName = "MUTE";
-      break;
-    case 0xE9:
-      consumerName = "VOLUME_UP";
-      break;
-    case 0xEA:
-      consumerName = "VOLUME_DOWN";
-      break;
-    case 0x00:
-      consumerName = "RELEASE";
-      break;
-    default:
-      consumerName = "UNKNOWN";
-      break;
-    }
-
-    Serial.printf("[CONSUMER] Code: 0x%02X (%s)\n", consumerCode, consumerName);
-
-    // Forward consumer control to BLE when connected (including release)
+    // Also forward to BLE if connected
     if (Bridge::bleDevice.isConnected())
     {
       Bridge::bleDevice.sendMedia(consumerCode);
@@ -339,19 +323,28 @@ void Bridge::sendJoystickReport(uint8_t buttons, uint8_t x, uint8_t y, uint8_t z
 
 void Bridge::sendKey(uint8_t keyCode, uint8_t modifier)
 {
+  uint8_t combinedModifier = modifier | prevModifier;
+  
+  // Send key press via ESP-NOW
+  EspNowKeyboardReport espNowReport;
+  espNowReport.modifier = combinedModifier;
+  espNowReport.keys[0] = keyCode;
+  memset(&espNowReport.keys[1], 0, 5);
+  esp_now_send(espNowTargetAddress, (uint8_t *)&espNowReport, sizeof(espNowReport));
+  
+  delay(50);
+  
+  // Send key release via ESP-NOW
+  espNowReport.modifier = prevModifier;
+  espNowReport.keys[0] = 0;
+  esp_now_send(espNowTargetAddress, (uint8_t *)&espNowReport, sizeof(espNowReport));
+
+  // Also forward to BLE if connected
   if (bleDevice.isConnected())
   {
-    // Combine with current keyboard modifier state (e.g., if Shift is held)
-    uint8_t combinedModifier = modifier | prevModifier;
-    
-    // Send key press with combined modifiers
     uint8_t keys[6] = {keyCode, 0, 0, 0, 0, 0};
     bleDevice.sendKeyboard(keys, combinedModifier);
-
-    // Small delay then release
     delay(50);
-
-    // Send key release but keep the original modifiers held
     uint8_t release[6] = {0, 0, 0, 0, 0, 0};
     bleDevice.sendKeyboard(release, prevModifier);
   }
