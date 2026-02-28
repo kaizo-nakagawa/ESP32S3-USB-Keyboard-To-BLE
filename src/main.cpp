@@ -1,15 +1,43 @@
 #include "Bridge.h"
 #include "Display.h"
 #include "DisplayMutex.h"
+#include "BLEMode.h"
+#include "ESPNowMode.h"
 // #include "GifPlayer.h"
 #include "Joystick.h"
 #include "esp_heap_caps.h"
 #include <Arduino.h>
 
+#define COMM_MODE 1 // 0 = BLE, 1 = ESP-NOW
+#define ESPNOW_TARGET_MAC {0x3C, 0x61, 0x05, 0xFC, 0x1A, 0x7B} // ESP-NOW target device MAC address
+
 void printPsramInfo()
 {
   Serial.printf("PSRAM total: %u bytes\n", ESP.getPsramSize());
   Serial.printf("PSRAM free : %u bytes\n", ESP.getFreePsram());
+}
+
+void initializeCommunicationMode()
+{
+#if COMM_MODE == 0
+  // BLE Mode
+  Serial.println("Initializing communication mode: BLE...");
+  BLEMode* bleMode = new BLEMode();
+  Bridge::setCommunicationMode(bleMode);
+  Serial.println("Communication mode set to BLE");
+
+#elif COMM_MODE == 1
+  // ESP-NOW Mode
+  Serial.println("Initializing communication mode: ESP-NOW...");
+  uint8_t targetMac[] = ESPNOW_TARGET_MAC;
+  ESPNowMode* espNowMode = new ESPNowMode(targetMac);
+  Bridge::setCommunicationMode(espNowMode);
+  Serial.printf("Communication mode set to ESP-NOW (target: %02X:%02X:%02X:%02X:%02X:%02X)\n",
+                targetMac[0], targetMac[1], targetMac[2], targetMac[3], targetMac[4], targetMac[5]);
+
+#else
+  #error "Unknown COMM_MODE. Use 0 for BLE or 1 for ESP-NOW"
+#endif
 }
 
 void setup()
@@ -26,6 +54,7 @@ void setup()
 
   try
   {
+    
     // Initialize SPI explicitly for display
     Serial.println("Initializing display...");
     delay(3500);
@@ -64,6 +93,9 @@ void setup()
   // Initialize joystick
   Serial.println("Initializing joystick...");
   joystickInit();
+
+  // Initialize communication mode (BLE or ESP-NOW)
+  initializeCommunicationMode();
 
   Bridge::begin();
 

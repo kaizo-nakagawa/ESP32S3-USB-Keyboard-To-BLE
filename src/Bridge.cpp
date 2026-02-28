@@ -1,17 +1,7 @@
 #include "Bridge.h"
 #include "Display.h"
 #include <hid_usage_keyboard.h>
-#include <WiFi.h>
-#include <esp_now.h>
 
-// ESP-NOW target device MAC address: dc:4f:22:0a:60:22
-static uint8_t espNowTargetAddress[] = {0xDC, 0x4F, 0x22, 0x0A, 0x60, 0x22};
-
-// Keyboard report structure for ESP-NOW transmission
-struct EspNowKeyboardReport {
-  uint8_t modifier;
-  uint8_t keys[6];
-};
 
 // Battery voltage divider
 #define BAT_ADC 1
@@ -38,8 +28,8 @@ static const char HID_TO_ASCII[256] = {
 static uint8_t prevKeyState[6] = {0, 0, 0, 0, 0, 0};
 static uint8_t prevModifier = 0;
 
-// Define static member variable with default constructor arguments
-BleDevice Bridge::bleDevice("Keychron Q1 Wireless", "Espressif");
+// Define static member variable
+CommunicationMode* Bridge::communicationMode = nullptr;
 
 float readBatteryVoltage()
 {
@@ -65,24 +55,18 @@ int batteryLevelToPercentage(float voltage)
   return (int)((voltage - 3.0) / (4.2 - 3.0) * 100);
 }
 
+void Bridge::setCommunicationMode(CommunicationMode* mode)
+{
+  communicationMode = mode;
+}
+
 void Bridge::begin()
 {
-  // Initialize WiFi for ESP-NOW
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
+  if (!communicationMode)
+    return;
 
-  // Initialize ESP-NOW
-  if (esp_now_init() != ESP_OK) return;
-
-  // Register ESP-NOW peer
-  esp_now_peer_info_t peerInfo = {};
-  memcpy(peerInfo.peer_addr, espNowTargetAddress, 6);
-  peerInfo.channel = 0;
-  peerInfo.encrypt = false;
-  if (esp_now_add_peer(&peerInfo) != ESP_OK) return;
-
-  // Initialize BLE
-  bleDevice.begin();
+  // Initialize communication mode
+  communicationMode->begin();
 
   // Initialize USB
   USBManager::setKeyboardCallback(onKeyboardReport);
@@ -96,19 +80,22 @@ void Bridge::begin()
   delay(100);
   float batteryVoltage = readBatteryVoltage();
   int batteryPercent = batteryLevelToPercentage(batteryVoltage);
-  displayUpdateStatus(bleDevice.isConnected(), batteryPercent, 0xff);
+  displayUpdateStatus(communicationMode->isConnected(), batteryPercent, 0xff);
 }
 
 void Bridge::loop()
 {
+  if (!communicationMode)
+    return;
+
   static unsigned long lastStatusTime = 0;
   if (millis() - lastStatusTime > 10000)
   {
     lastStatusTime = millis();
     float batteryVoltage = readBatteryVoltage();
     int batteryPercent = batteryLevelToPercentage(batteryVoltage);
-    displayUpdateStatus(bleDevice.isConnected(), batteryPercent, 0xff);
-    bleDevice.reportBatteryLevel(batteryPercent);
+    displayUpdateStatus(communicationMode->isConnected(), batteryPercent, 0xff);
+    communicationMode->reportBatteryLevel(batteryPercent);
   }
 }
 
@@ -120,99 +107,114 @@ hid_keyboard_input_report_boot_t *showKeyboardReport(const uint8_t *data, size_t
   hid_keyboard_input_report_boot_t *kb_report =
       (hid_keyboard_input_report_boot_t *)data;
 
-  // Detect key presses (keys in current state but not in previous)
+  // Detect newly pressed keys by finding key codes in current that weren't in previous
   for (int i = 0; i < 6; i++)
   {
-    if (kb_report->key[i] != 0 && prevKeyState[i] == 0 && kb_report->key[i] != prevKeyState[i])
+    if (kb_report->key[i] != 0)
     {
-      char asciiKey = HID_TO_ASCII[kb_report->key[i]];
-
-      // Handle shift modifier for uppercase/symbols
-      if (kb_report->modifier.val & 0x02 || kb_report->modifier.val & 0x20)
-      { // Left or Right Shift
-        if (asciiKey >= 'a' && asciiKey <= 'z')
+      bool keyWasPressed = false;
+      // Check if this key code was already in the previous state
+      for (int j = 0; j < 6; j++)
+      {
+        if (prevKeyState[j] == kb_report->key[i])
         {
-          asciiKey = asciiKey - 'a' + 'A';
+          keyWasPressed = true;
+          break;
+        }
+      }
+
+      // If key is new, display it
+      if (!keyWasPressed)
+      {
+        char asciiKey = HID_TO_ASCII[kb_report->key[i]];
+
+        // Handle shift modifier for uppercase/symbols
+        if (kb_report->modifier.val & 0x02 || kb_report->modifier.val & 0x20)
+        { // Left or Right Shift
+          if (asciiKey >= 'a' && asciiKey <= 'z')
+          {
+            asciiKey = asciiKey - 'a' + 'A';
+          }
+          else
+          {
+            // Handle shifted symbols
+            switch (kb_report->key[i])
+            {
+            case 0x1E:
+              asciiKey = '!';
+              break;
+            case 0x1F:
+              asciiKey = '@';
+              break;
+            case 0x20:
+              asciiKey = '#';
+              break;
+            case 0x21:
+              asciiKey = '$';
+              break;
+            case 0x22:
+              asciiKey = '%';
+              break;
+            case 0x23:
+              asciiKey = '^';
+              break;
+            case 0x24:
+              asciiKey = '&';
+              break;
+            case 0x25:
+              asciiKey = '*';
+              break;
+            case 0x26:
+              asciiKey = '(';
+              break;
+            case 0x27:
+              asciiKey = ')';
+              break;
+            case 0x2D:
+              asciiKey = '_';
+              break;
+            case 0x2E:
+              asciiKey = '+';
+              break;
+            case 0x2F:
+              asciiKey = '{';
+              break;
+            case 0x30:
+              asciiKey = '}';
+              break;
+            case 0x31:
+              asciiKey = '|';
+              break;
+            case 0x33:
+              asciiKey = ':';
+              break;
+            case 0x34:
+              asciiKey = '"';
+              break;
+            case 0x35:
+              asciiKey = '~';
+              break;
+            case 0x36:
+              asciiKey = '<';
+              break;
+            case 0x37:
+              asciiKey = '>';
+              break;
+            case 0x38:
+              asciiKey = '?';
+              break;
+            }
+          }
+        }
+
+        if (asciiKey != 0)
+        {
+          displayKeyPressed(asciiKey);
         }
         else
         {
-          // Handle shifted symbols
-          switch (kb_report->key[i])
-          {
-          case 0x1E:
-            asciiKey = '!';
-            break;
-          case 0x1F:
-            asciiKey = '@';
-            break;
-          case 0x20:
-            asciiKey = '#';
-            break;
-          case 0x21:
-            asciiKey = '$';
-            break;
-          case 0x22:
-            asciiKey = '%';
-            break;
-          case 0x23:
-            asciiKey = '^';
-            break;
-          case 0x24:
-            asciiKey = '&';
-            break;
-          case 0x25:
-            asciiKey = '*';
-            break;
-          case 0x26:
-            asciiKey = '(';
-            break;
-          case 0x27:
-            asciiKey = ')';
-            break;
-          case 0x2D:
-            asciiKey = '_';
-            break;
-          case 0x2E:
-            asciiKey = '+';
-            break;
-          case 0x2F:
-            asciiKey = '{';
-            break;
-          case 0x30:
-            asciiKey = '}';
-            break;
-          case 0x31:
-            asciiKey = '|';
-            break;
-          case 0x33:
-            asciiKey = ':';
-            break;
-          case 0x34:
-            asciiKey = '"';
-            break;
-          case 0x35:
-            asciiKey = '~';
-            break;
-          case 0x36:
-            asciiKey = '<';
-            break;
-          case 0x37:
-            asciiKey = '>';
-            break;
-          case 0x38:
-            asciiKey = '?';
-            break;
-          }
+          displayKeyPressed(' '); // Unknown key placeholder
         }
-      }
-
-      if (asciiKey != 0)
-      {
-        displayKeyPressed(asciiKey);
-      }
-      else
-      {
-        displayKeyPressed(' '); // Unknown key placeholder
       }
     }
   }
@@ -220,9 +222,23 @@ hid_keyboard_input_report_boot_t *showKeyboardReport(const uint8_t *data, size_t
   // Detect key releases (keys in previous state but not in current)
   for (int i = 0; i < 6; i++)
   {
-    if (prevKeyState[i] != 0 && kb_report->key[i] == 0)
+    if (prevKeyState[i] != 0)
     {
-      displayKeyReleased();
+      bool keyIsStillPressed = false;
+      // Check if this previous key code is in the current state
+      for (int j = 0; j < 6; j++)
+      {
+        if (kb_report->key[j] == prevKeyState[i])
+        {
+          keyIsStillPressed = true;
+          break;
+        }
+      }
+
+      if (!keyIsStillPressed)
+      {
+        displayKeyReleased();
+      }
     }
   }
 
@@ -237,26 +253,48 @@ hid_keyboard_input_report_boot_t *showKeyboardReport(const uint8_t *data, size_t
 
 void Bridge::onKeyboardReport(const uint8_t *data, size_t length)
 {
+  if (!communicationMode)
+    return;
 
   hid_keyboard_input_report_boot_t *kb_report = showKeyboardReport(data, length);
   if (!kb_report)
     return;
 
-  // Forward to ESP-NOW
-  EspNowKeyboardReport espNowReport;
-  espNowReport.modifier = kb_report->modifier.val;
-  memcpy(espNowReport.keys, kb_report->key, 6);
-  esp_now_send(espNowTargetAddress, (uint8_t *)&espNowReport, sizeof(espNowReport));
-
-  // Also forward to BLE if connected
-  if (Bridge::bleDevice.isConnected())
+  // Send individual reports for each newly pressed key
+  // This ensures receivers that only process keys[0] still detect all keypresses
+  for (int i = 0; i < 6; i++)
   {
-    Bridge::bleDevice.sendKeyboard(kb_report->key, kb_report->modifier.val);
+    if (kb_report->key[i] != 0)
+    {
+      bool keyWasPressed = false;
+      for (int j = 0; j < 6; j++)
+      {
+        if (prevKeyState[j] == kb_report->key[i])
+        {
+          keyWasPressed = true;
+          break;
+        }
+      }
+
+      // Send newly pressed key
+      if (!keyWasPressed)
+      {
+        uint8_t singleKeyReport[6] = {kb_report->key[i], 0, 0, 0, 0, 0};
+        communicationMode->sendKeyboard(singleKeyReport, kb_report->modifier.val);
+        delay(5); // Small delay to ensure receiver processes each key
+      }
+    }
   }
+
+  // Then send the full current state report
+  communicationMode->sendKeyboard(kb_report->key, kb_report->modifier.val);
 }
 
 void Bridge::onMouseReport(const uint8_t *data, size_t length)
 {
+  if (!communicationMode)
+    return;
+
   if (length < 3)
   {
     return;
@@ -272,15 +310,15 @@ void Bridge::onMouseReport(const uint8_t *data, size_t length)
     wheel = (int8_t)data[3];
   }
 
-  // Forward to BLE
-  if (Bridge::bleDevice.isConnected())
-  {
-    Bridge::bleDevice.sendMouse(buttons, x, y, wheel);
-  }
+  // Forward to communication mode
+  communicationMode->sendMouse(buttons, x, y, wheel);
 }
 
 void Bridge::onGenericReport(const uint8_t *data, size_t length)
 {
+  if (!communicationMode)
+    return;
+
   // Handle generic HID reports (consumer control, knobs, media keys, etc)
   if (length < 2)
   {
@@ -293,69 +331,54 @@ void Bridge::onGenericReport(const uint8_t *data, size_t length)
   // Handle Consumer Control codes (Report ID 0x04)
   if (reportId == 0x04)
   {
-    // Forward to ESP-NOW (send as raw 2-byte: type + code)
-    uint8_t mediaReport[2] = {0x02, consumerCode};  // 0x02 = media type
-    esp_now_send(espNowTargetAddress, mediaReport, 2);
-
-    // Also forward to BLE if connected
-    if (Bridge::bleDevice.isConnected())
-    {
-      Bridge::bleDevice.sendMedia(consumerCode);
-    }
+    // Forward to communication mode
+    communicationMode->sendMedia(consumerCode);
   }
 }
 
 void Bridge::sendMouseReport(uint8_t buttons, int8_t x, int8_t y, int8_t wheel)
 {
-  if (bleDevice.isConnected())
+  if (communicationMode)
   {
-    bleDevice.sendMouse(buttons, x, y, wheel);
+    communicationMode->sendMouse(buttons, x, y, wheel);
   }
 }
 
 void Bridge::sendJoystickReport(uint8_t buttons, uint8_t x, uint8_t y, uint8_t z)
 {
-  if (bleDevice.isConnected())
+  if (communicationMode)
   {
-    bleDevice.sendJoystick(buttons, x, y, z);
+    communicationMode->sendJoystick(buttons, x, y, z);
   }
 }
 
 void Bridge::sendKey(uint8_t keyCode, uint8_t modifier)
 {
-  uint8_t combinedModifier = modifier | prevModifier;
-  
-  // Send key press via ESP-NOW
-  EspNowKeyboardReport espNowReport;
-  espNowReport.modifier = combinedModifier;
-  espNowReport.keys[0] = keyCode;
-  memset(&espNowReport.keys[1], 0, 5);
-  esp_now_send(espNowTargetAddress, (uint8_t *)&espNowReport, sizeof(espNowReport));
-  
-  delay(50);
-  
-  // Send key release via ESP-NOW
-  espNowReport.modifier = prevModifier;
-  espNowReport.keys[0] = 0;
-  esp_now_send(espNowTargetAddress, (uint8_t *)&espNowReport, sizeof(espNowReport));
+  if (!communicationMode)
+    return;
 
-  // Also forward to BLE if connected
-  if (bleDevice.isConnected())
-  {
-    uint8_t keys[6] = {keyCode, 0, 0, 0, 0, 0};
-    bleDevice.sendKeyboard(keys, combinedModifier);
-    delay(50);
-    uint8_t release[6] = {0, 0, 0, 0, 0, 0};
-    bleDevice.sendKeyboard(release, prevModifier);
-  }
+  uint8_t combinedModifier = modifier | prevModifier;
+
+  // Send key press
+  uint8_t keys[6] = {keyCode, 0, 0, 0, 0, 0};
+  communicationMode->sendKeyboard(keys, combinedModifier);
+  delay(50);
+
+  // Send key release
+  uint8_t release[6] = {0, 0, 0, 0, 0, 0};
+  communicationMode->sendKeyboard(release, prevModifier);
 }
 
 bool Bridge::isConnected()
 {
-  return bleDevice.isConnected();
+  if (!communicationMode)
+    return false;
+  return communicationMode->isConnected();
 }
 
 std::string Bridge::getConnectedClientName()
 {
-  return bleDevice.getConnectedClientName();
+  if (!communicationMode)
+    return "";
+  return communicationMode->getConnectedName();
 }
